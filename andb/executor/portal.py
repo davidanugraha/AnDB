@@ -5,7 +5,7 @@ from andb.common.tabular_format import TabularFormat
 from andb.catalog.attribute import AndbAttributeForm
 from andb.catalog import CATALOG_ANDB_TYPE
 from andb.catalog.oid import INVALID_OID, OID_TEMP_TABLE
-from andb.catalog.syscache import get_attribute_by_name
+from andb.catalog.syscache import CATALOG_ANDB_ATTRIBUTE, get_attribute_by_name
 from andb.executor.operator.logical import PromptColumn, TableColumn, FunctionColumn
 from andb.sql.parser import CmdType
 from andb.runtime import session_vars
@@ -140,6 +140,11 @@ class ExecutionPortal:
                 if isinstance(column, TableColumn):
                     attr = get_attribute_by_name(column.table_name, column.column_name,
                                                  database_oid=session_vars.SessionVars.database_oid)
+                    if not attr:
+                        # we cannot get attributes according to table name and column name
+                        # perhaps, this is not a regular table. we could try to get the table oid by logical query
+                        relation_oid = self.plan_tree.logical_query.from_tables[column.table_name]
+                        attr = CATALOG_ANDB_ATTRIBUTE.get_table_attr(relation_oid, column.column_name)
                     to_be_defined_fields.append((column.standard_name, attr.type_oid, attr.length, attr.notnull))
                 elif isinstance(column, FunctionColumn):
                     #TODO: TBH, we have to determine what the type of function return value is

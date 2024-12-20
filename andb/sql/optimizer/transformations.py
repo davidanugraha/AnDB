@@ -184,7 +184,7 @@ class QueryLogicalPlanTransformation(BaseTransformation):
         operator = GroupOperator(group_by_columns=query.groupby_columns,
                                  aggregate_function=aggregation_function,
                                  having_clause=query.having_clause)
-        # set the group by operator onto all of nodes.
+        # set the group by operator onto all nodes.
         operator.children = query.children
         query.children = [operator]
 
@@ -318,6 +318,7 @@ class SelectTransformation(BaseTransformation):
                 real_file_path = os.path.join(os.path.realpath('./files'), file_path)
                 if os.path.exists(real_file_path):
                     query.from_tables[file_path] = OID_SCANNING_FILE
+                    query.table_attr_forms[file_path] = CATALOG_ANDB_ATTRIBUTE.get_table_forms(OID_SCANNING_FILE)
                 else:
                     raise InitializationStageError(f'not found the file {file_path} from files directory.')
 

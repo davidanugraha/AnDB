@@ -1,4 +1,4 @@
-from andb.catalog.oid import OID_SYSTEM_TABLE_ATTRIBUTE
+from andb.catalog.oid import OID_SYSTEM_TABLE_ATTRIBUTE, OID_SCANNING_FILE
 from ._base import CatalogTable, CatalogForm
 from .type import _ANDB_TYPE, VarcharType
 
@@ -37,10 +37,22 @@ class AndbAttributeTable(CatalogTable):
         pass
 
     def get_table_forms(self, class_oid):
+        if class_oid == OID_SCANNING_FILE:
+            # for scanning table, we have two columns: content and embedding
+            return (AndbAttributeForm(class_oid=class_oid, name='content',
+                                      type_oid=_ANDB_TYPE.get_type_oid('text'),
+                                      length=0, num=0, notnull=False),
+                    AndbAttributeForm(class_oid=class_oid, name='embedding',
+                                      type_oid=_ANDB_TYPE.get_type_oid('vector'),
+                                      length=0, num=1, notnull=False))
         return self.search(lambda r: r.class_oid == class_oid)
 
     def get_table_attr(self, table_oid, attr_name):
-        result = self.search(lambda r: r.class_oid == table_oid and r.name == attr_name)
+        result = []
+        for form in self.get_table_forms(class_oid=table_oid):
+            if form.name == attr_name:
+                result.append(form)
+
         if len(result) != 1:
             return None
         return result[0]

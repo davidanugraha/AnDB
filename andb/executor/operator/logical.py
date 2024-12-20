@@ -226,14 +226,10 @@ class LogicalQuery(LogicalOperator):
         for table_name, table_oid in self.from_tables.items():
             if lookup_table_name is not None and lookup_table_name != table_name:
                 continue
-            if table_oid == OID_SCANNING_FILE:
-                # for scanning table, we have two columns: content and embedding
-                table_columns.extend([TableColumn(DummyTableName.SCANNING_FILE_NAME, 'content'), 
-                                     TableColumn(DummyTableName.SCANNING_FILE_NAME, 'embedding')])
-            else:
-                for attr_from in self.table_attr_forms[table_name]:
-                    if (table_name, attr_from.name) in self._seen_table_columns:
-                        table_columns.append(TableColumn(table_name, attr_from.name))
+
+            for attr_from in self.table_attr_forms[table_name]:
+                if (table_name, attr_from.name) in self._seen_table_columns:
+                    table_columns.append(TableColumn(table_name, attr_from.name))
         return table_columns
 
 

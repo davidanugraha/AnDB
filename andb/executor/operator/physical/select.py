@@ -1,5 +1,6 @@
 import os
 from andb.ai import embedding_model
+from andb.catalog.oid import OID_SCANNING_FILE
 from andb.sql.parser.ast.operation import Function
 from andb.storage.engines.heap.relation import close_relation, open_relation
 from andb.storage.lock import rlock
@@ -15,12 +16,14 @@ from ..utils import expression_eval, ExprOperation
 from .base import PhysicalOperator
 from andb.executor.operator import utils
 
+
 class ExpressionContext:
     def __init__(self, column_value_pairs):
         self.column_value_pairs = column_value_pairs
 
     def get_column_value(self, table_name, column_name):
         return self.column_value_pairs.get(TableColumn(table_name, column_name), None)
+
 
 def evaluate_expression(expr, context):
     if isinstance(expr, FunctionColumn):
@@ -303,7 +306,8 @@ class IndexScan(Scan):
         for i, form in enumerate(self.index_forms):
             assert form.index_num == i
             assert self.table_attr_forms[i].num == form.attr_num
-            self.index_columns.append(TableColumn(self.base_table_relation.name, self.table_attr_forms[form.attr_num].name))
+            self.index_columns.append(
+                TableColumn(self.base_table_relation.name, self.table_attr_forms[form.attr_num].name))
 
     def close(self):
         super().close()
@@ -332,7 +336,7 @@ class IndexScan(Scan):
                 yield tuple_
 
     def next_internal(self):
-        #TODO: range
+        # TODO: range
         assert isinstance(self._filter.condition.expr, ExprOperation)
         const_values = {column: [] for column in self.index_columns}
         for column in self.index_columns:
@@ -417,7 +421,7 @@ class SystemTableScan(TableScan):
                 for catalog_form in catalog_table.rows:
                     yield catalog_form.to_tuple(catalog_form)
                 break
-                
+
 
 class Append(Scan):
     def __init__(self, relation_oid, columns, filter_: Filter = None, lock=rlock.ACCESS_SHARE_LOCK):
@@ -426,7 +430,7 @@ class Append(Scan):
 
     def open(self):
         super().open()
-        
+
         columns = None
         for child in self.children:
             child.open()
@@ -444,8 +448,9 @@ class Append(Scan):
     def close(self):
         for child in self.children:
             child.close()
-        
+
         super().close()
+
 
 class TempTableScan(Append):
     def __init__(self, relation_oid, columns, filter_: Filter = None, lock=rlock.ACCESS_SHARE_LOCK):
@@ -457,32 +462,35 @@ class FunctionScan(Scan):
     pass
 
 
-
 class FileScan(PhysicalOperator):
     def __init__(self, file_path, columns):
         super().__init__('FileScan')
         self.file_path = file_path
         self.fd = None
         self.columns = columns
-    
+
     def open(self):
         if self.file_path[-3:] != 'txt':
             raise NotImplementedError(f"File {self.file_path} is not supported")
-        
+
         real_file_path = os.path.join(os.path.realpath('./files'), self.file_path)
 
         self.fd = open(real_file_path, 'r', errors='ignore')
 
+        # None means scanning all columns
+        if not self.columns:
+            self.columns = [TableColumn(table_name=self.file_path, column_name=form.name)
+                            for form in CATALOG_ANDB_ATTRIBUTE.get_table_forms(OID_SCANNING_FILE)]
+
     def next(self):
         assert len(self.columns) == 2  # content, embedding
 
-        content = self.fd.readlines()
+        content = ''.join(self.fd.readlines())
         embedding = embedding_model.text_to_embedding(content)
         yield (str(content), embedding)
-    
+
     def close(self):
         self.fd.close()
-
 
 class Join(PhysicalOperator):
     def __init__(self, join_operator, join_type, target_columns=None, join_filter: Filter = None):
@@ -507,7 +515,7 @@ class Join(PhysicalOperator):
         if not self.columns:
             self.columns = self.join_columns
 
-        #TODO: semi-join and anti semi-join should prune self.columns
+        # TODO: semi-join and anti semi-join should prune self.columns
 
         # check all target columns are all in joined columns
         # time complexity can reduce to O(N) from O(N2)
@@ -528,7 +536,7 @@ class Join(PhysicalOperator):
     def close(self):
         self.left_tree.close()
         self.right_tree.close()
-        
+
         super().close()
 
     def next(self):
@@ -733,12 +741,12 @@ class HashAggregation(Aggregation):
 
     def open(self):
         super().open()
-        
+
         assert len(self.children) == 1
         child = self.children[0]
         child.open()
 
-        #TODO: fix the relationship between involved_columns and self.columns
+        # TODO: fix the relationship between involved_columns and self.columns
         # and their using places.
         involved_columns = self.grouping_columns + self.aggregation_columns
         self.columns = self.grouping_columns + [FunctionColumn(self.function_name, self.aggregation_columns)]
@@ -784,8 +792,9 @@ class HashAggregation(Aggregation):
 
     def close(self):
         self.children[0].close()
-        
+
         super().close()
+
 
 class Sort(Materialize):
     INTERNAL_SORT = 'internal_sort'
