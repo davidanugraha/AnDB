@@ -50,7 +50,9 @@ class SQLLexer(sly.Lexer):
 
         # Add new tokens
         PROMPT,
-        FILE
+        FILE,
+        TABULAR,
+        SCHEMAS
     }
 
     CREATE = 'CREATE'
@@ -101,6 +103,8 @@ class SQLLexer(sly.Lexer):
     CHECKPOINT = 'CHECKPOINT'
     PROMPT = 'PROMPT'
     FILE = 'FILE'
+    TABULAR = 'TABULAR'
+    SCHEMAS = 'SCHEMAS'
 
     DOT = r'\.'
     COMMA = r','

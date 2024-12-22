@@ -18,7 +18,7 @@ from .ast.misc import Constant, Star, Tuple
 from .exception import ParsingException
 from .ast.drop import DropTable, DropIndex
 from .ast.utility import Command
-from .ast.semantic import FileSource, Prompt
+from .ast.semantic import FileSource, Prompt, SemanticSchemas, SemanticTabular
 
 
 def check_select_keywords(select, operation):
@@ -209,7 +209,8 @@ class SQLParser(sly.Parser):
 
     @_('select FROM from_table_aliased',
        'select FROM join_tables_implicit',
-       'select FROM join_tables')
+       'select FROM join_tables',
+       'select FROM from_tabular')
     def select(self, p):
         select = p.select
         check_select_keywords(select, 'FROM')
@@ -569,9 +570,17 @@ class SQLParser(sly.Parser):
         return DropIndex(name=p.identifier)
 
     # Define parsing rule for 'Command'
-    @_('CHECKPOINT')
+    @_('CHECKPOINT',
+       'SET update_parameter_list')
     def command(self, p):
-        return Command(command=p[0])
+        if len(p) == 1 and p[0] == 'CHECKPOINT':
+            # Handle CHECKPOINT command
+            return Command(command='checkpoint')
+        elif len(p) >= 1 and p[0] == 'SET':
+            # Handle SET command
+            return Command(command='set', parameters=p[1])
+        else:
+            raise NotImplementedError("Unsupported command.")
 
     # Add new rules for function calls
     @_('identifier LPAREN expr_list RPAREN')
@@ -604,7 +613,22 @@ class SQLParser(sly.Parser):
     @_('PROMPT LPAREN expr RPAREN')
     def expr(self, p):
         return Prompt(p.expr)
+    
+    @_('string AS defined_column')
+    def expr(self, p):
+        return (p.string, p.defined_column)
         
     @_('FILE LPAREN expr RPAREN')
     def from_table(self, p):
         return FileSource(p.expr)
+    
+    # SCHEMAS definition
+    @_('SCHEMAS LPAREN expr_list RPAREN')
+    def from_semantic_schemas(self, p):
+        return SemanticSchemas(p.expr_list)
+    
+    @_('TABULAR LPAREN from_semantic_schemas FROM from_table RPAREN',
+       'TABULAR LPAREN from_semantic_schemas FROM join_tables_implicit RPAREN',
+       'TABULAR LPAREN from_semantic_schemas FROM from_table_aliased RPAREN')
+    def from_tabular(self, p):
+        return SemanticTabular(semantic_schemas=p.from_semantic_schemas, table_source=p[4])

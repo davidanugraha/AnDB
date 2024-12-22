@@ -272,7 +272,7 @@ class SemanticTransform(PhysicalOperator):
 class SemanticScan(PhysicalOperator):
     """Physical operator for processing document into a proper table with prompts"""
     
-    def __init__(self, schema, document, client_model, intermediate_data="tabular"):
+    def __init__(self, schema, client_model, intermediate_data="tabular"):
         """
         Args:
             schema: Schema of the table.
@@ -282,17 +282,20 @@ class SemanticScan(PhysicalOperator):
         """
         super().__init__('SemanticScan')
         self.schema = schema
-        self.document = document
         self.client_model = client_model
         self.intermediate_data = intermediate_data
         if self.intermediate_data not in ["json", "tabular"]:
             raise NotImplementedError(f"Intermediate data `{self.intermediate_data}` is not implemented!")
         
+        self.document = None
         self.stream = None
         self.columns = None
 
     def open(self):
-        return super.open()
+        if len(self.children) != 1:
+            raise ValueError("SemanticScan requires exactly one input operator")
+        self.children[0].open()
+        super.open()
     
     def _parse_json(output):
         try:
@@ -375,6 +378,7 @@ class SemanticScan(PhysicalOperator):
         temperature = 0.1
         prompt_schema = f"Schema: {self.schema}"
         table_tuples = []
+        self.document = self.children[0].next() # Assume child is Scan
 
         if self.intermediate_data == 'json':
             prompt_system = """
@@ -422,5 +426,6 @@ class SemanticScan(PhysicalOperator):
 
     def close(self):
         """Clean up resources"""
-        return super.close()
+        self.children[0].close()
+        super.close()
 

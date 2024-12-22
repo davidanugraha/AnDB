@@ -14,7 +14,7 @@ from andb.sql.parser.ast.join import Join
 from andb.sql.parser.ast.misc import Star
 from andb.sql.parser.ast.operation import Function
 from andb.sql.parser.ast.select import Select
-from andb.sql.parser.ast.semantic import Prompt, FileSource
+from andb.sql.parser.ast.semantic import Prompt, FileSource, SemanticSchemas, SemanticTabular
 from andb.sql.parser.ast.update import Update
 from andb.storage.engines.heap.relation import RelationKinds
 from andb.sql.parser.ast.utility import Command
@@ -51,7 +51,7 @@ class UtilityTransformation(BaseTransformation):
         elif isinstance(ast, Explain):
             physical_operator = ExplainOperator(logical_plan=andb_ast_transform(ast.target))
         elif isinstance(ast, Command):
-            physical_operator = CommandOperator(ast.command)
+            physical_operator = CommandOperator(ast.command, ast.parameters)
 
         return UtilityOperator(physical_operator)
 
@@ -187,6 +187,20 @@ class QueryLogicalPlanTransformation(BaseTransformation):
         # set the group by operator onto all nodes.
         operator.children = query.children
         query.children = [operator]
+        
+    @staticmethod
+    def process_semantic_tabular(query: LogicalQuery):
+        # Check if there are any prompt columns in target list
+        semantic_schema_columns = [col for col in query.target_list if isinstance(col, SemanticSchemaColumn)]
+        if not semantic_schema_columns:
+            return
+
+        semantic_op = SemanticScanOperator(
+            schema=semantic_schema_columns,
+            children=query.children
+        )
+        # Replace query's children with semantic operator
+        query.children = [semantic_op]
 
     @staticmethod
     def process_semantic_transform(query: LogicalQuery):
@@ -216,6 +230,7 @@ class QueryLogicalPlanTransformation(BaseTransformation):
             QueryLogicalPlanTransformation.process_join_scan(query)
 
         # Add semantic transform processing before other operations
+        QueryLogicalPlanTransformation.process_semantic_tabular(query)
         QueryLogicalPlanTransformation.process_semantic_transform(query)
 
         #TODO: limit, ...
@@ -301,6 +316,16 @@ class SelectTransformation(BaseTransformation):
                 inner_transform(ast.right)
             elif isinstance(ast, FileSource):
                 unchecked_files.append(ast.file_path.value)
+            elif isinstance(ast, SemanticTabular):
+                semantic_schemas = ast.semantic_schemas
+                if not isinstance(semantic_schemas, SemanticSchemas):
+                    raise InitializationStageError("Invalid SemanticSchemas in SemanticTabular.")
+                for schema in semantic_schemas.schema_list:
+                    if not isinstance(schema, tuple) or len(schema) != 2 or len(schema[1]) != 2:
+                        raise InitializationStageError(f"Invalid schema definition: {schema}")
+
+                # Process the table source within the SemanticTabular
+                inner_transform(ast.table_source)
             else:
                 raise NotImplementedError()
 
@@ -387,6 +412,11 @@ class SelectTransformation(BaseTransformation):
                 if target.alias:
                     prompt_column.alias = target.alias.parts
                 query.target_list.append(prompt_column)
+            elif isinstance(target, SemanticSchema):
+                semantic_schema_column = SemanticSchemaColumn(target)
+                if target.alias:
+                    semantic_schema_column.alias = target.alias.parts
+                query.target_list.append(semantic_schema_column)
             else:
                 #TODO: function and agg
                 raise NotImplementedError('not supported this syntax.')
@@ -564,7 +594,6 @@ class DeleteTransformation(BaseTransformation):
         select.where = ast.where
         query = SelectTransformation.on_transform(select)
         return DeleteOperator(ast.table.parts, query)
-
 
 class UpdateTransformation(BaseTransformation):
     @staticmethod

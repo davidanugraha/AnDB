@@ -1,9 +1,14 @@
+import json
+import logging
+
 from andb.catalog.oid import INVALID_OID
 from andb.catalog.syscache import CATALOG_ANDB_ATTRIBUTE, CATALOG_ANDB_TYPE, CATALOG_ANDB_CLASS
 from andb.errno.errors import RollbackError, DDLException
 from andb.storage.engines.heap.relation import RelationKinds, bt_create_index_internal, \
     hot_create_table, hot_drop_table, bt_drop_index
 from andb.runtime import global_vars
+from andb.runtime import session_vars
+from andb.ai.client_model import ClientModelFactory
 
 from .base import PhysicalOperator
 
@@ -161,9 +166,10 @@ class DropIndexOperator(PhysicalOperator):
 
 
 class CommandOperator(PhysicalOperator):
-    def __init__(self, command: str):
+    def __init__(self, command: str, parameters: dict):
         super().__init__(f'Command: {command}')
         self.command = command
+        self.parameters = parameters
 
     def open(self):
         pass  # No initialization required
@@ -171,6 +177,19 @@ class CommandOperator(PhysicalOperator):
     def next(self):
         if self.command == 'checkpoint':
             global_vars.xact_manager.checkpoint()
+        elif self.command == 'set':
+            for var_name, constant_val in self.parameters.items():
+                if hasattr(session_vars.SessionVars, var_name):
+                    # So other variables are not modified, not sure better way to do this
+                    if var_name == 'client_model':
+                        with open(constant_val.value, 'r') as f:
+                            config_model = json.load(f)
+                        session_vars.SessionVars.client_model = ClientModelFactory.create_model(config_model)
+                        logging.info(f"SET client_model using config taken from {constant_val.value}")
+                else:
+                    raise ValueError(f"Session variable `{var_name}` is not recognized!")
+            
+            yield True # To by pass list() output
         else:
             raise RuntimeError(f"Unsupported command: {self.command}")
 

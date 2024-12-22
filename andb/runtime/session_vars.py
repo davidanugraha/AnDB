@@ -6,4 +6,5 @@ from andb.constants.macros import INVALID_XID
 class SessionVars(local):
     database_oid = OID_DATABASE_ANDB
     session_xid = INVALID_XID
+    client_model = None
 

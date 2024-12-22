@@ -1,3 +1,5 @@
+import json
+
 from andb.catalog.oid import INVALID_OID, OID_SCANNING_FILE, OID_TEMP_TABLE
 from andb.catalog.syscache import CATALOG_ANDB_CLASS, CATALOG_ANDB_INDEX, CATALOG_ANDB_ATTRIBUTE
 from andb.errno.errors import InitializationStageError
@@ -317,6 +319,22 @@ class UpdateImplementation(BaseImplementation):
         return update.UpdatePhysicalOperator(table_oid=table_oid, scan_operator=physical_query.children[0],
                                              attr_num_value_pair=attr_num_value_pair)
 
+class SemanticScanImplementation(BaseImplementation):
+    @classmethod
+    def match(cls, operator) -> bool:
+        # Check if any target in the target list is a PromptColumn
+        return isinstance(operator, SemanticScanOperator)
+
+    @classmethod 
+    def on_implement(cls, old_operator):
+        if session_vars.SessionVars.client_model:
+            return semantic.SemanticScan(
+                schema=old_operator.schema,
+                client_model=session_vars.SessionVars.client_model,
+                intermediate_data="json",
+            )
+        else:
+            raise RuntimeError("Client model has not been set!")
 
 class SemanticTransformImplementation(BaseImplementation):
     @classmethod
@@ -326,13 +344,16 @@ class SemanticTransformImplementation(BaseImplementation):
 
     @classmethod 
     def on_implement(cls, old_operator):
-        # Create semantic target list operator to process prompt columns
-        return semantic.SemanticTransform(
-            # Pass through the original columns
-            target_columns=old_operator.columns,
-            # Pass through any filter conditions
-            prompt_text=old_operator.semantic_prompt
-        )
+        if session_vars.SessionVars.client_model:        
+            return semantic.SemanticTransform(
+                # Pass through the original columns
+                target_columns=old_operator.columns,
+                # Pass through any filter conditions
+                prompt_text=old_operator.semantic_prompt,
+                client_model=session_vars.SessionVars.client_model
+            )
+        else:
+            raise RuntimeError("Client model has not been set!")
 
 
 _all_implementations = [impl() for impl in BaseImplementation.__subclasses__()]

@@ -127,6 +127,30 @@ class PromptColumn(AbstractColumn):
 
     def core(self):
         return PromptColumn(self.prompt_text)
+    
+class SemanticSchemaColumn(AbstractColumn):
+    def __init__(self, prompt_text, column_name, column_type):
+        super().__init__()
+        self.prompt_text = prompt_text
+        self.table_name = DummyTableName.TEMP_TABLE_NAME
+        self.column_name = column_name
+        self.column_type = column_type
+        self.function_name = None
+        self.alias = None
+
+    def __repr__(self):
+        return f"SEMANTIC_SCHEMA_COLUMN: {self.column_name}"
+
+    def __eq__(self, other):
+        if not isinstance(other, SemanticSchemaColumn):
+            return False
+        return str(self) == str(other)
+
+    def __hash__(self):
+        return hash((self.prompt_text, self.column_name))
+
+    def core(self):
+        return SemanticSchemaColumn(self.prompt_text, self.column_name, self.column_type)
 
 class Condition(LogicalOperator):
     def __init__(self, operation, children=None):
@@ -240,6 +264,16 @@ class ProjectionOperator(LogicalOperator):
 
     def get_args(self):
         return ('columns', self.columns),
+
+
+class SemanticScanOperator(LogicalOperator):
+    def __init__(self, schemas, children=None):
+        super().__init__('SemanticScan', children)
+        self.schemas = schemas
+
+    def get_args(self):
+        return ('schemas', self.schemas),
+
 
 class SemanticTransformOperator(LogicalOperator):
     def __init__(self, columns, prompt_text, children=None):
@@ -379,7 +413,6 @@ class DeleteOperator(LogicalOperator):
     def get_args(self):
         return (('table_name', self.table_name),
                 ('condition', self.query.condition))
-
 
 class UpdateOperator(LogicalOperator):
     def __init__(self, table_name, query, columns, values, condition: Condition = None):
