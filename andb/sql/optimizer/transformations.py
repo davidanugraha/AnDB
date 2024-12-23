@@ -210,14 +210,13 @@ class QueryLogicalPlanTransformation(BaseTransformation):
             return
             
         # Create semantic transform operator
-        for prompt_col in prompt_columns:
-            semantic_op = SemanticTransformOperator(
-                columns=query.target_list,
-                prompt_text=prompt_col.prompt_text,
-                children=query.children
-            )
-            # Replace query's children with semantic operator
-            query.children = [semantic_op]
+        semantic_op = SemanticTransformOperator(
+            columns=query.target_list,
+            children=query.children
+        )
+
+        # Replace query's children with semantic operator
+        query.children = [semantic_op]
 
     @staticmethod
     def on_transform(query: LogicalQuery):
@@ -412,11 +411,6 @@ class SelectTransformation(BaseTransformation):
                 if target.alias:
                     prompt_column.alias = target.alias.parts
                 query.target_list.append(prompt_column)
-            elif isinstance(target, SemanticSchema):
-                semantic_schema_column = SemanticSchemaColumn(target)
-                if target.alias:
-                    semantic_schema_column.alias = target.alias.parts
-                query.target_list.append(semantic_schema_column)
             else:
                 #TODO: function and agg
                 raise NotImplementedError('not supported this syntax.')

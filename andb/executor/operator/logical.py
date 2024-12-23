@@ -120,7 +120,7 @@ class PromptColumn(AbstractColumn):
     def __eq__(self, other):
         if not isinstance(other, PromptColumn):
             return False
-        return str(self) == str(other)
+        return self.prompt_text == other.prompt_text
 
     def __hash__(self):
         return hash((self.prompt_text))
@@ -267,22 +267,21 @@ class ProjectionOperator(LogicalOperator):
 
 
 class SemanticScanOperator(LogicalOperator):
-    def __init__(self, schemas, children=None):
+    def __init__(self, schema, children=None):
         super().__init__('SemanticScan', children)
-        self.schemas = schemas
+        self.schema = schema
 
     def get_args(self):
-        return ('schemas', self.schemas),
+        return ('schema', self.schema),
 
 
 class SemanticTransformOperator(LogicalOperator):
-    def __init__(self, columns, prompt_text, children=None):
+    def __init__(self, columns, children=None):
         super().__init__('SemanticTransform', children)
         self.columns = columns
-        self.semantic_prompt = prompt_text
 
     def get_args(self):
-        return ('columns', self.columns), ('prompt_text', self.semantic_prompt)
+        return ('columns', self.columns),
 
 
 class SelectionOperator(LogicalOperator):

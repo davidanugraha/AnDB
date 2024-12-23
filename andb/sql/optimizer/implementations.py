@@ -326,7 +326,7 @@ class SemanticScanImplementation(BaseImplementation):
         return isinstance(operator, SemanticScanOperator)
 
     @classmethod 
-    def on_implement(cls, old_operator):
+    def on_implement(cls, old_operator: SemanticScanOperator):
         if session_vars.SessionVars.client_model:
             return semantic.SemanticScan(
                 schema=old_operator.schema,
@@ -349,7 +349,6 @@ class SemanticTransformImplementation(BaseImplementation):
                 # Pass through the original columns
                 target_columns=old_operator.columns,
                 # Pass through any filter conditions
-                prompt_text=old_operator.semantic_prompt,
                 client_model=session_vars.SessionVars.client_model
             )
         else:

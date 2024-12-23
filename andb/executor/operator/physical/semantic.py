@@ -205,7 +205,7 @@ class SemanticJoin(PhysicalOperator):
 class SemanticTransform(PhysicalOperator):
     """Physical operator for processing semantic target list with prompts"""
     
-    def __init__(self, target_columns, prompt_text, client_model):
+    def __init__(self, target_columns, client_model):
         """
         Args:
             target_columns: List of target columns including prompts
@@ -213,7 +213,6 @@ class SemanticTransform(PhysicalOperator):
         """
         super().__init__('SemanticTransform')
         self.columns = target_columns
-        self.prompt_text = prompt_text
         self.client_model = client_model
         self.prompt_columns = [col for col in target_columns if isinstance(col, PromptColumn)]
         self.stream = None
@@ -243,8 +242,8 @@ class SemanticTransform(PhysicalOperator):
                     # Process semantic prompt
                     try:
                         messages=[
-                            {"role": "system", "content": "Process the following text based on the given prompt."},
-                            {"role": "user", "content": f"Prompt: {self.prompt_text}\nText: {input_text}"}
+                            {"role": "system", "content": "You are a helpful assistant that follows the instruction provided by the user."},
+                            {"role": "user", "content": f"Instruction: {target.prompt_text}\n Use the following text to help complete the previous instruction: \n Raw text: {input_text}"}
                         ]
                         response = self.client_model.complete_messages(messages=messages, temperature=0.3)
                         result = response.strip()
