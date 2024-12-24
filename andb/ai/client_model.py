@@ -1,32 +1,54 @@
 import os
 import logging
 
-from andb.constants.strings import OPENAI_API_KEY
+from andb.errno.errors import ConfigError
+
 
 DEFAULT_TEMPERATURE = 0.1
 DEFAULT_MAX_TOKENS = 1024
 
+
+class ModelConfig(dict):
+    def __getitem__(self, key):
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            raise ConfigError(f'Not set configuration {key}')
+
 class ClientModelFactory:
-    @staticmethod
-    def create_model(config):
+    # singleton pattern
+    __client_model = None
+    __client_model_type = None
+
+    @classmethod
+    def create_model(cls, model_type, **config):
         """
         Factory method to initialize the correct ClientModel subclass based on config.
 
         Args:
+            model_type (str): The type of model to use, defaults to openai
             config (dict): Configuration containing model type and related settings.
 
         Returns:
             ClientModel: An instance of the appropriate subclass.
         """
-        model_type = config.get("model_type")
+        config = ModelConfig(config)
+        # if user change model type, we need to reinit a new model
+        if cls.__client_model and cls.__client_model_type == model_type:
+            return cls.__client_model
+
         if model_type == "hf_api":
-            return HFAPIModel(config)
+            cls.__client_model = HFAPIModel(config)
         elif model_type == "openai":
-            return OpenAIModel(config)
+            cls.__client_model = OpenAIModel(config)
         elif model_type == "offline":
-            return OfflineModel(config)
+            cls.__client_model = OfflineModel(config)
         else:
             raise ValueError("Invalid model type. Choose 'hf_api', 'openai', or 'offline'.")
+
+        cls.__client_model_type = model_type
+        return cls.__client_model
+
 
 class ClientModel:
     def complete_messages(self, messages, max_tokens=DEFAULT_MAX_TOKENS, temperature=DEFAULT_TEMPERATURE, stream=False):
@@ -44,6 +66,7 @@ class ClientModel:
         """
         raise NotImplementedError("complete_messages must be implemented in subclasses.")
 
+
 class HFAPIModel(ClientModel):
     def __init__(self, config):
         from huggingface_hub import InferenceClient
@@ -59,11 +82,12 @@ class HFAPIModel(ClientModel):
             temperature=temperature,
             stream=stream,
         )
-        
+
         if stream:
             return response
         else:
             return response.choices[0].message.content
+
 
 class OpenAIModel(ClientModel):
     def __init__(self, config):
@@ -82,11 +106,12 @@ class OpenAIModel(ClientModel):
             temperature=temperature,
             stream=stream,
         )
-        
+
         if stream:
             return response
         else:
             return response.choices[0].message.content
+
 
 class OfflineModel(ClientModel):
     def __init__(self, config):
@@ -102,12 +127,12 @@ class OfflineModel(ClientModel):
     def complete_messages(self, messages, max_tokens=DEFAULT_MAX_TOKENS, temperature=DEFAULT_TEMPERATURE, stream=False):
         if stream:
             logging.warning("Streaming is not implemented for model loaded offline")
-        
+
         # Use the tokenizer's chat template method
         input_ids = self.tokenizer.apply_chat_template(messages,
-                                                        add_generation_prompt=True,
-                                                        tokenize=True,
-                                                        return_tensors="pt").to(self.model.device)
+                                                       add_generation_prompt=True,
+                                                       tokenize=True,
+                                                       return_tensors="pt").to(self.model.device)
 
         # Generate response (should we add options for sampling?)
         outputs = self.model.generate(
@@ -118,4 +143,3 @@ class OfflineModel(ClientModel):
         )
         response = outputs[0][input_ids.shape[-1]:]
         return self.tokenizer.decode(response, skip_special_tokens=True)
-    

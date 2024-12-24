@@ -179,15 +179,14 @@ class CommandOperator(PhysicalOperator):
             global_vars.xact_manager.checkpoint()
         elif self.command == 'set':
             for var_name, constant_val in self.parameters.items():
-                if hasattr(session_vars.SessionVars, var_name):
+                if hasattr(session_vars.SessionParameter, var_name):
                     # So other variables are not modified, not sure better way to do this
-                    if var_name == 'client_model':
-                        with open(constant_val.value, 'r') as f:
-                            config_model = json.load(f)
-                        session_vars.SessionVars.client_model = ClientModelFactory.create_model(config_model)
-                        logging.info(f"SET client_model using config taken from {constant_val.value}")
+                    setattr(session_vars.SessionParameter, var_name, constant_val.value)
+                    logging.info(f"SET {var_name} to {constant_val.value}, "
+                                 f"previous value: {getattr(session_vars.SessionParameter, var_name)}")
                 else:
-                    raise ValueError(f"Session variable `{var_name}` is not recognized!")
+                    setattr(session_vars.SessionParameter, var_name, constant_val.value)
+                    logging.warning(f"Session variable `{var_name}` is not recognized but set to {constant_val.value}")
             
             yield True # To by pass list() output
         else:

@@ -1,3 +1,2 @@
 BIG_END = 'big'
 QUERY_TERMINATOR = ';'
-OPENAI_API_KEY = ''

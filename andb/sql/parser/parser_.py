@@ -573,12 +573,12 @@ class SQLParser(sly.Parser):
     @_('CHECKPOINT',
        'SET update_parameter_list')
     def command(self, p):
-        if len(p) == 1 and p[0] == 'CHECKPOINT':
-            # Handle CHECKPOINT command
-            return Command(command='checkpoint')
-        elif len(p) >= 1 and p[0] == 'SET':
-            # Handle SET command
-            return Command(command='set', parameters=p[1])
+        if len(p) == 1:
+            # Handle command without parameter, e.g., CHECKPOINT
+            return Command(command=p[0])
+        elif len(p) == 2:
+            # Handle command with parameter, e.g., SET a=b
+            return Command(command=p[0], parameters=p[1])
         else:
             raise NotImplementedError("Unsupported command.")
 
