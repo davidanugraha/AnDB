@@ -1,5 +1,5 @@
 import os
-from andb.ai import embedding_model
+from andb.ai.embedding_model import EmbeddingModelFactory
 from andb.catalog.oid import OID_SCANNING_FILE
 from andb.sql.parser.ast.operation import Function
 from andb.storage.engines.heap.relation import close_relation, open_relation
@@ -15,6 +15,10 @@ from ..logical import Condition, DummyTableName, TableColumn, AggregationFunctio
 from ..utils import expression_eval, ExprOperation
 from .base import PhysicalOperator
 from andb.executor.operator import utils
+
+def default_embedding_model():
+    return EmbeddingModelFactory.create_model(model_type=session_vars.SessionParameter.embed_llm,
+                                              **session_vars.SessionParameter.__dict__)
 
 
 class ExpressionContext:
@@ -468,6 +472,7 @@ class FileScan(PhysicalOperator):
         self.file_path = file_path
         self.fd = None
         self.columns = columns
+        self.embedding_model = default_embedding_model()
 
     def open(self):
         if self.file_path[-3:] != 'txt':
@@ -486,7 +491,7 @@ class FileScan(PhysicalOperator):
         assert len(self.columns) == 2  # content, embedding
 
         content = ''.join(self.fd.readlines())
-        embedding = embedding_model.text_to_embedding(content)
+        embedding = self.embedding_model.generate_embeddings(content)
         yield (str(content), embedding)
 
     def close(self):

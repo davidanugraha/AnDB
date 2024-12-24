@@ -11,6 +11,17 @@ class SessionVars(local):
 
 # For user configuration during the session
 class SessionParameter(local):
-    llm = 'openai'
-    openai_model = 'gpt-4o-mini'
+    # Client model related parameters
+    client_llm = 'openai'
+    client_openai_model = 'gpt-4o-mini'
+    client_hf_repo_id = 'meta-llama/Meta-Llama-3-8B-Instruct'
+    client_offline_model_path = 'meta-llama/Meta-Llama-3-8B-Instruct'
+    
+    # Embedding model related parameters
+    embed_llm = 'openai'
+    embed_openai_model = 'text-embedding-3-large'
+    embed_hf_repo_id = 'sentence-transformers/all-MiniLM-L6-v2'
+    embed_offline_model_path = 'sentence-transformers/all-MiniLM-L6-v2'
+    
+    hf_api_key = None
     openai_api_key = None

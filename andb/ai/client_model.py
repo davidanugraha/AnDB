@@ -1,19 +1,4 @@
-import os
-import logging
-
-from andb.errno.errors import ConfigError
-
-
-DEFAULT_TEMPERATURE = 0.1
-DEFAULT_MAX_TOKENS = 1024
-
-
-class ModelConfig(dict):
-    def __getitem__(self, key):
-        try:
-            return super().__getitem__(key)
-        except KeyError:
-            raise ConfigError(f'Not set configuration {key}')
+from andb.ai.utils import *
 
 class ClientModelFactory:
     # singleton pattern
@@ -71,8 +56,8 @@ class HFAPIModel(ClientModel):
     def __init__(self, config):
         from huggingface_hub import InferenceClient
 
-        self.client = InferenceClient()
-        self.model = config.get("hf_repo_id")
+        self.client = InferenceClient(api_key=config.get("hf_api_key") or os.getenv('HF_API_KEY'))
+        self.model = config.get("client_hf_repo_id")
 
     def complete_messages(self, messages, max_tokens=DEFAULT_MAX_TOKENS, temperature=DEFAULT_TEMPERATURE, stream=False):
         response = self.client.chat_completion(
@@ -94,9 +79,9 @@ class OpenAIModel(ClientModel):
         import openai
         from openai import OpenAI
 
-        openai.api_key = config["openai_api_key"]
-        self.openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY') or config["openai_api_key"])
-        self.openai_model = config["openai_model"]
+        openai.api_key = config.get("openai_api_key")
+        self.openai_client = OpenAI(api_key=config.get("openai_api_key") or os.getenv('OPENAI_API_KEY'))
+        self.openai_model = config.get("client_openai_model")
 
     def complete_messages(self, messages, max_tokens=DEFAULT_MAX_TOKENS, temperature=DEFAULT_TEMPERATURE, stream=False):
         response = self.openai_client.chat.completions.create(
@@ -117,9 +102,9 @@ class OfflineModel(ClientModel):
     def __init__(self, config):
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        self.tokenizer = AutoTokenizer.from_pretrained(config["model_path"])
+        self.tokenizer = AutoTokenizer.from_pretrained(config.get("client_offline_model_path"))
         self.model = AutoModelForCausalLM.from_pretrained(
-            config["model_path"],
+            config.get("client_offline_model_path"),
             device_map="auto",
             torch_dtype="float16"
         )
