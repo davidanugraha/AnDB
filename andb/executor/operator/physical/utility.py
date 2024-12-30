@@ -8,7 +8,6 @@ from andb.storage.engines.heap.relation import RelationKinds, bt_create_index_in
     hot_create_table, hot_drop_table, bt_drop_index
 from andb.runtime import global_vars
 from andb.runtime import session_vars
-from andb.ai.client_model import ClientModelFactory
 from andb.storage.engines.memory.table import memory_create_table, memory_drop_table
 
 from .base import PhysicalOperator
@@ -199,9 +198,9 @@ class CommandOperator(PhysicalOperator):
         pass  # No initialization required
 
     def next(self):
-        if self.command == 'checkpoint':
+        if self.command.lower() == 'checkpoint':
             global_vars.xact_manager.checkpoint()
-        elif self.command == 'set':
+        elif self.command.lower() == 'set':
             for var_name, constant_val in self.parameters.items():
                 if hasattr(session_vars.SessionParameter, var_name):
                     # So other variables are not modified, not sure better way to do this

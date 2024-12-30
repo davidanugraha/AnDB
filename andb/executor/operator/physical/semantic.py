@@ -12,7 +12,7 @@ from andb.runtime import session_vars
 
 
 def default_client_model():
-    return ClientModelFactory.create_model(model_type=session_vars.SessionParameter.llm,
+    return ClientModelFactory.create_model(model_type=session_vars.SessionParameter.client_llm,
                                            **session_vars.SessionParameter.__dict__)
 
 
