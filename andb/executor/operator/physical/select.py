@@ -1,12 +1,13 @@
 import os
 from andb.ai import embedding_model
-from andb.catalog.oid import OID_SCANNING_FILE
+from andb.catalog.oid import INVALID_OID, OID_SCANNING_FILE
 from andb.sql.parser.ast.operation import Function
 from andb.storage.engines.heap.relation import close_relation, open_relation
+from andb.storage.engines.memory.table import memory_select_all
 from andb.storage.lock import rlock
 from andb.errno.errors import InitializationStageError, ExecutionStageError, FinalizationStageError
 from andb.storage.engines.heap.relation import hot_simple_select, bt_search_range, bt_search, bt_scan_all_keys
-from andb.catalog.syscache import CATALOG_ANDB_ATTRIBUTE, CATALOG_ANDB_INDEX, CATALOG_ANDB_FUNCTIONS, get_all_catalogs
+from andb.catalog.syscache import CATALOG_ANDB_ATTRIBUTE, CATALOG_ANDB_CLASS, CATALOG_ANDB_INDEX, CATALOG_ANDB_FUNCTIONS, CATALOG_ANDB_TYPE, get_all_catalogs
 from andb.runtime import global_vars, session_vars
 from andb.sql.parser.ast.misc import Constant, Star
 from andb.sql.parser.ast.join import JoinType
@@ -18,32 +19,49 @@ from andb.executor.operator import utils
 
 
 class ExpressionContext:
-    def __init__(self, column_value_pairs):
+    def __init__(self, column_value_pairs, column_type_pairs):
         self.column_value_pairs = column_value_pairs
+        self.column_type_pairs = column_type_pairs
 
     def get_column_value(self, table_name, column_name):
         return self.column_value_pairs.get(TableColumn(table_name, column_name), None)
+    
+    def format_column_value(self, table_name, column_name, value):
+        type_form = self.column_type_pairs.get(TableColumn(table_name, column_name), None)
+        if type_form is None:
+            return value
+        return type_form.format_value(value)
 
 
-def evaluate_expression(expr, context):
+def evaluate_expression(expr, context, compared_expr=None):
     if isinstance(expr, FunctionColumn):
         # evaluate function call
         function_name = expr.function_name
         columns = [evaluate_expression(column, context) for column in expr.columns]
         # get function result
-        return CATALOG_ANDB_FUNCTIONS.perform_function(function_name, session_vars.SessionVars.database_oid, columns)
+        return CATALOG_ANDB_FUNCTIONS.perform_function(function_name, 
+                                                       session_vars.SessionVars.database_oid, 
+                                                       columns)
     elif isinstance(expr, ExprOperation):
         # evaluate operator, such as <, >, =, etc.
-        left = evaluate_expression(expr.left, context)
-        right = evaluate_expression(expr.right, context)
+        left = evaluate_expression(expr.left, context, expr.right)
+        right = evaluate_expression(expr.right, context, expr.left)
         return expression_eval(expr.op, left, right)
     elif isinstance(expr, TableColumn):
         # get column value from context
+        # we don't need to format the value here, 
+        # because the value is already in the correct format.
         return context.get_column_value(expr.table_name, expr.column_name)
     elif isinstance(expr, Constant):
+        # we need to try to format the value here
+        if isinstance(compared_expr, TableColumn):
+            return context.format_column_value(compared_expr.table_name, compared_expr.column_name, expr.value)
         return expr.value
     elif isinstance(expr, (int, str, float, bool, type(None))):
         # sometimes, the value is not wrapped in Constant
+        # we need to try to format the value here
+        if isinstance(compared_expr, TableColumn):
+            return context.format_column_value(compared_expr.table_name, compared_expr.column_name, expr)
         return expr
     else:
         raise NotImplementedError(f"Expression type '{type(expr)}' is not supported.")
@@ -57,6 +75,7 @@ class Filter(PhysicalOperator):
         self.column_condition = {}
         self._index_of_tuple_lookup = {}
         self._construct_mapper()
+        self.type_forms = None
 
     def get_args(self):
         return (('condition', self.condition),) + super().get_args()
@@ -99,17 +118,29 @@ class Filter(PhysicalOperator):
 
         dfs(self.condition)
 
-    def set_tuple_columns(self, columns):
+    def set_tuple_columns(self, columns, type_oids=None):
         # operator must tell the filter columns, otherwise, filter cannot
         # know the meaning of each tuple's column.
         self.columns = columns
 
+        if type_oids is None:
+            # get type oids from catalog
+            type_oids = []
+            for column in columns:
+                table_oid = CATALOG_ANDB_CLASS.get_relation_oid(
+                    column.table_name, session_vars.SessionVars.database_oid)
+                if table_oid == INVALID_OID:
+                    raise RuntimeError(f'table {column.table_name} not found.')
+
+                attr = CATALOG_ANDB_ATTRIBUTE.get_table_attr(table_oid, column.column_name)
+                if attr is None:
+                    raise RuntimeError(f'table {column.table_name} column {column.column_name} not found.')
+                type_oids.append(attr.type_oid)
+        
+        # get type forms by type oids
+        self.type_forms = [CATALOG_ANDB_TYPE.get_type_form_by_oid(type_oid) for type_oid in type_oids]
+
     def get_index_of_tuple_by_column(self, lookup_table_column):
-        # if self._index_of_tuple_lookup:
-        #     for table_column in self.column_condition:
-        #         table_oid = CATALOG_ANDB_CLASS.get_relation_oid(table_column.table_name, session_vars.database_oid)
-        #         self._index_of_tuple_lookup[table_column] = CATALOG_ANDB_ATTRIBUTE.get_table_attr_num(table_oid,
-        #                                                                                       table_column.column_name)
         assert self.columns
         # construct a lookup hashtable to speed up searching
         if not self._index_of_tuple_lookup:
@@ -117,57 +148,21 @@ class Filter(PhysicalOperator):
                 self._index_of_tuple_lookup[column] = i
         return self._index_of_tuple_lookup[lookup_table_column]
 
-    def compare_values(self, expr, left_values, right_values):
-        if expr == 'and':
-            rv = True
-            for left_value in left_values:
-                for right_value in right_values:
-                    rv = rv and expression_eval('and', left_value, right_value)
-                    if not rv:  # None, False
-                        return rv
-        elif expr == 'or':
-            rv = False
-            for left_value in left_values:
-                for right_value in right_values:
-                    rv = rv or expression_eval('and', left_value, right_value)
-                    if rv:  # True
-                        return rv
-        elif expr == 'in':
-            assert len(left_values) == 1
-            return left_values[0] in right_values
-        else:
-            assert len(left_values) == 1 and len(right_values) == 1
-            return expression_eval(expr, left_values[0], right_values[0])
+    def judge_condition(self, node: Condition, context: ExpressionContext):
+        if node is None:
+            raise ValueError(f'node should not be None.')
 
-        return rv
+        left_value = node.left
+        right_value = node.right
+        if isinstance(node.left, Condition):
+            left_value = self.judge_condition(node.left, context)
+        if isinstance(node.right, Condition):
+            right_value = self.judge_condition(node.right, context)
 
-    def judge(self, column_value_pairs):
-        def inner_dfs(node: Condition):
-            if node is None:
-                raise ValueError(f'node should not be None.')
+        left_evaluated = evaluate_expression(left_value, context, right_value)
+        right_evaluated = evaluate_expression(right_value, context, left_value)
 
-            left_value = node.left
-            right_value = node.right
-            if isinstance(node.left, Condition):
-                left_value = inner_dfs(node.left)
-            if isinstance(node.right, Condition):
-                right_value = inner_dfs(node.right)
-
-            context = ExpressionContext(column_value_pairs)
-
-            # evaluate left and right
-            # left_evaluated = evaluate_expression(left_value, context) if isinstance(left_value, FunctionColumn) else (
-            #     column_value_pairs[left_value] if isinstance(left_value, TableColumn) else left_value
-            # )
-            # right_evaluated = evaluate_expression(right_value, context) if isinstance(right_value, FunctionColumn) else (
-            #     column_value_pairs[right_value] if isinstance(right_value, TableColumn) else right_value
-            # )
-            left_evaluated = evaluate_expression(left_value, context)
-            right_evaluated = evaluate_expression(right_value, context)
-
-            return expression_eval(node.expr.value, left_evaluated, right_evaluated)
-
-        return inner_dfs(self.condition)
+        return expression_eval(node.expr.value, left_evaluated, right_evaluated)
 
     def filter(self, iterator):
         columns = list(self.column_condition.keys())
@@ -178,12 +173,15 @@ class Filter(PhysicalOperator):
             if not tuple_:
                 break
 
-            pairs = {column: None for column in columns}
+            value_pairs = {column: None for column in columns}
+            type_pairs = {column: None for column in columns}
             for column in columns:
                 attr_num = self.get_index_of_tuple_by_column(column)
-                pairs[column] = tuple_[attr_num]
+                value_pairs[column] = tuple_[attr_num]
+                type_pairs[column] = self.type_forms[attr_num]
 
-            if self.judge(pairs):
+            context = ExpressionContext(value_pairs, type_pairs)
+            if self.judge_condition(self.condition, context):
                 yield tuple_
 
     def next(self):
@@ -231,10 +229,12 @@ class Scan(PhysicalOperator):
         # set each input column name for tuple filter
         if self._filter:
             columns = []
+            type_oids = []
             for attr_form in attr_form_array:
                 table_column = TableColumn(self.base_table_relation.name, attr_form.name)
                 columns.append(table_column)
-            self._filter.set_tuple_columns(columns)
+                type_oids.append(attr_form.type_oid)
+            self._filter.set_tuple_columns(columns, type_oids=type_oids)
 
         # None means scanning all columns
         if not self.columns:
@@ -422,6 +422,15 @@ class SystemTableScan(TableScan):
                     yield catalog_form.to_tuple(catalog_form)
                 break
 
+class MemoryTableScan(Scan):
+    def __init__(self, relation_oid, columns, filter_: Filter = None, lock=rlock.ACCESS_SHARE_LOCK):
+        super().__init__(relation_oid, columns, filter_, lock)
+        self.name = 'MemoryTableScan'
+        self.database_oid = session_vars.SessionVars.database_oid
+
+    def next_internal(self):
+        for tuple_ in memory_select_all(self.relation_oid, self.database_oid):
+            yield tuple_
 
 class Append(Scan):
     def __init__(self, relation_oid, columns, filter_: Filter = None, lock=rlock.ACCESS_SHARE_LOCK):

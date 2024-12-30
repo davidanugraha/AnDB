@@ -4,7 +4,7 @@ from .lexer import SQLLexer
 from .ast.base import ASTNode
 from .ast.explain import Explain
 from .ast.alter import AlterTable
-from .ast.create import CreateIndex, CreateTable
+from .ast.create import CreateIndex, CreateTable, CreateMemoryTable, DropMemoryTable
 from .ast.union import Union
 from .ast.select import Select
 from .ast.insert import Insert
@@ -549,6 +549,22 @@ class SQLParser(sly.Parser):
     @_('CREATE TABLE identifier LPAREN defined_columns RPAREN')
     def create(self, p):
         return CreateTable(name=p.identifier, columns=p.defined_columns)
+    
+    @_('CREATE TEMPORARY TABLE identifier LPAREN defined_columns RPAREN')
+    def create(self, p):
+        return CreateMemoryTable(
+            name=p.identifier,
+            columns=p.defined_columns,
+            temporary=True
+        )
+    
+    @_('CREATE MEMORY TABLE identifier LPAREN defined_columns RPAREN')
+    def create(self, p):
+        return CreateMemoryTable(
+            name=p.identifier,
+            columns=p.defined_columns,
+            temporary=False
+        )
 
     @_('CREATE INDEX identifier ON identifier LPAREN result_columns RPAREN',
        'CREATE INDEX identifier ON identifier LPAREN result_columns RPAREN USING identifier')
@@ -563,6 +579,10 @@ class SQLParser(sly.Parser):
     @_('DROP TABLE identifier')
     def drop(self, p):
         return DropTable(name=p.identifier)
+
+    @_('DROP TEMPORARY TABLE identifier')
+    def drop(self, p):
+        return DropMemoryTable(name=p.identifier)
 
     # Drop Index
     @_('DROP INDEX identifier')

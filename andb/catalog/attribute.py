@@ -36,20 +36,20 @@ class AndbAttributeTable(CatalogTable):
         #TODO: insert system catalog information?
         pass
 
-    def get_table_forms(self, class_oid):
-        if class_oid == OID_SCANNING_FILE:
+    def get_table_forms(self, table_oid):
+        if table_oid == OID_SCANNING_FILE:
             # for scanning table, we have two columns: content and embedding
-            return (AndbAttributeForm(class_oid=class_oid, name='content',
+            return (AndbAttributeForm(class_oid=table_oid, name='content',
                                       type_oid=_ANDB_TYPE.get_type_oid('text'),
                                       length=0, num=0, notnull=False),
-                    AndbAttributeForm(class_oid=class_oid, name='embedding',
+                    AndbAttributeForm(class_oid=table_oid, name='embedding',
                                       type_oid=_ANDB_TYPE.get_type_oid('vector'),
                                       length=0, num=1, notnull=False))
-        return self.search(lambda r: r.class_oid == class_oid)
+        return self.search(lambda r: r.class_oid == table_oid)
 
     def get_table_attr(self, table_oid, attr_name):
         result = []
-        for form in self.get_table_forms(class_oid=table_oid):
+        for form in self.get_table_forms(table_oid=table_oid):
             if form.name == attr_name:
                 result.append(form)
 

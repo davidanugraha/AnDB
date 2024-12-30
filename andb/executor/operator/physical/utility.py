@@ -9,6 +9,7 @@ from andb.storage.engines.heap.relation import RelationKinds, bt_create_index_in
 from andb.runtime import global_vars
 from andb.runtime import session_vars
 from andb.ai.client_model import ClientModelFactory
+from andb.storage.engines.memory.table import memory_create_table, memory_drop_table
 
 from .base import PhysicalOperator
 
@@ -84,6 +85,21 @@ class CreateTableOperator(PhysicalOperator):
         yield self.table_oid
 
 
+class CreateMemoryTableOperator(CreateTableOperator):
+    def __init__(self, table_name, fields, database_oid, temporary=True):
+        super().__init__(table_name, fields, database_oid)
+        self.temporary = temporary
+
+    def next(self):
+        # Create temporary table in memory
+        self.table_oid = memory_create_table(
+            table_name=self.table_name, 
+            fields=self.fields,
+            database_oid=self.database_oid
+        )
+        yield self.table_oid
+
+
 class ExplainOperator(PhysicalOperator):
 
     @staticmethod
@@ -147,6 +163,14 @@ class DropTableOperator(PhysicalOperator):
         pass  # No cleanup required
 
 
+class DropMemoryTableOperator(DropTableOperator):
+    def next(self):
+        oid = CATALOG_ANDB_CLASS.get_relation_oid(
+            self.table_name, self.database_oid, 
+            kind=RelationKinds.MEMORY_TABLE)
+        memory_drop_table(oid, self.database_oid)
+        yield True
+
 class DropIndexOperator(PhysicalOperator):
     def __init__(self, index_name, database_oid):
         super().__init__('DropIndex')
@@ -194,3 +218,4 @@ class CommandOperator(PhysicalOperator):
 
     def close(self):
         pass  # No cleanup required
+

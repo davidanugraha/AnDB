@@ -49,6 +49,10 @@ class AndbBaseType:
             return NULL_LENGTH
         return cls.type_bytes
 
+    @classmethod
+    def format_value(cls, value):
+        return value
+
 
 class IntegerType(AndbBaseType):
     oid = 1000
@@ -279,6 +283,11 @@ class VectorType(AndbBaseType):
         length = cstructure.unpack_one(_VARIABLE_TYPE_CTYPE, b[:VARIABLE_TYPE_HEADER_LENGTH])
         return VARIABLE_TYPE_HEADER_LENGTH + length * cstructure.calcsize(cls.type_char)
 
+    @classmethod
+    def format_value(cls, value):
+        vector = cls.cast_from_string(value)
+        return f'[{", ".join(map(str, vector))}]'
+
 
 class AndbTypeForm(CatalogForm):
     __fields__ = {
@@ -332,6 +341,13 @@ class AndbTypeTable(CatalogTable):
                     self._lookup_cache[r.type_alias] = r
         r = self._lookup_cache[name]
         return _BUILTIN_TYPES_DICT[r.type_name]
+    
+    @memoize
+    def get_type_form_by_oid(self, oid):
+        for r in self.rows:
+            if r.oid == oid:
+                return _BUILTIN_TYPES_DICT[r.type_name]
+        return None
 
     def get_type_oid(self, name):
         meta = self.get_type_form(name)

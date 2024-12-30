@@ -2,7 +2,9 @@ from andb.catalog.syscache import CATALOG_ANDB_INDEX
 from andb.errno.errors import InitializationStageError
 from andb.storage.engines.heap.bptree import TuplePointer
 from andb.storage.engines.heap.relation import hot_simple_insert, bt_simple_insert, open_relation, close_relation
+from andb.storage.engines.memory.table import memory_insert
 from andb.storage.lock import rlock
+from andb.runtime import session_vars
 from .base import PhysicalOperator
 
 
@@ -59,3 +61,21 @@ class InsertPhysicalOperator(PhysicalOperator):
             close_relation(relation.oid, rlock.ROW_EXCLUSIVE_LOCK)
 
         super().close()
+
+
+class InsertMemoryTablePhysicalOperator(PhysicalOperator):
+    def __init__(self, table_oid, python_tuples=None, select=None):
+        super().__init__('InsertMemoryTable')
+        self.table_oid = table_oid
+        self.database_oid = session_vars.SessionVars.database_oid
+        self.python_tuples = python_tuples
+        self.select = select
+
+    def next(self):
+        if not self.python_tuples:
+            #TODO: fetch tuples from select clause
+            pass
+
+        for python_tuple in self.python_tuples:
+            memory_insert(self.table_oid, self.database_oid, python_tuple)
+            yield

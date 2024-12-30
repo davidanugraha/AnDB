@@ -98,7 +98,9 @@ class ScanImplementation(BaseImplementation):
                                           filter_=(None if scan_operator.condition is None
                                                    else Filter(scan_operator.condition)))
         if table_kind == RelationKinds.MEMORY_TABLE:
-            raise InitializationStageError(f'not supported memory table {scan_operator.table_name}.')
+            return select.MemoryTableScan(scan_operator.table_oid, scan_operator.table_columns,
+                                          filter_=(None if scan_operator.condition is None
+                                                   else Filter(scan_operator.condition)))
 
         predicates = cls._extract_predicates(scan_operator.condition)
         if len(predicates) == 0:
@@ -266,9 +268,15 @@ class InsertImplementation(BaseImplementation):
         select_physical_plan = None
         if old_operator.select:
             select_physical_plan = QueryImplementation.on_implement(old_operator.select)
-
-        return insert.InsertPhysicalOperator(table_oid=old_operator.table_oid,
+        table_kind = CATALOG_ANDB_CLASS.get_relation_kind(old_operator.table_oid)
+        if table_kind == RelationKinds.MEMORY_TABLE:
+            return insert.InsertMemoryTablePhysicalOperator(table_oid=old_operator.table_oid,
                                              python_tuples=old_operator.values, select=select_physical_plan)
+        elif table_kind == RelationKinds.HEAP_TABLE:
+            return insert.InsertPhysicalOperator(table_oid=old_operator.table_oid,
+                                             python_tuples=old_operator.values, select=select_physical_plan)
+        else:
+            raise InitializationStageError(f'not supported table kind {table_kind}')
 
 
 class DeleteImplementation(BaseImplementation):
@@ -279,17 +287,21 @@ class DeleteImplementation(BaseImplementation):
     @classmethod
     def on_implement(cls, old_operator: DeleteOperator):
         table_oid = CATALOG_ANDB_CLASS.get_relation_oid(old_operator.table_name,
-                                                        database_oid=session_vars.SessionVars.database_oid,
-                                                        kind=RelationKinds.HEAP_TABLE)
+                                                        database_oid=session_vars.SessionVars.database_oid)
         if table_oid == INVALID_OID:
             raise InitializationStageError(f'not found table {old_operator.table_name}.')
 
         physical_query = QueryImplementation.on_implement(old_operator.query)
 
-        return delete.DeletePhysicalOperator(
-            table_oid, physical_query.children[0]
-        )
-
+        table_kind = CATALOG_ANDB_CLASS.get_relation_kind(table_oid)
+        if table_kind == RelationKinds.MEMORY_TABLE:
+            return delete.DeleteMemoryTablePhysicalOperator(table_oid, physical_query.children[0])
+        elif table_kind == RelationKinds.HEAP_TABLE:
+            return delete.DeletePhysicalOperator(
+                table_oid, physical_query.children[0]
+            )
+        else:
+            raise InitializationStageError(f'not supported table kind {table_kind}')
 
 class UpdateImplementation(BaseImplementation):
     @classmethod
@@ -300,7 +312,7 @@ class UpdateImplementation(BaseImplementation):
     def on_implement(cls, old_operator: UpdateOperator):
         table_oid = CATALOG_ANDB_CLASS.get_relation_oid(relation_name=old_operator.table_name,
                                                         database_oid=session_vars.SessionVars.database_oid,
-                                                        kind=RelationKinds.HEAP_TABLE)
+                                                        )
         if table_oid == INVALID_OID:
             raise InitializationStageError(f'cannot get oid for the table {old_operator.table_name}.')
 
@@ -315,8 +327,15 @@ class UpdateImplementation(BaseImplementation):
         if len(attr_num_value_pair) != len(old_operator.columns):
             raise InitializationStageError(f'cannot update these columns: {attr_num_value_pair.keys()}')
 
-        return update.UpdatePhysicalOperator(table_oid=table_oid, scan_operator=physical_query.children[0],
+        table_kind = CATALOG_ANDB_CLASS.get_relation_kind(table_oid)
+        if table_kind == RelationKinds.MEMORY_TABLE:
+            return update.UpdateMemoryTablePhysicalOperator(table_oid=table_oid, scan_operator=physical_query.children[0],
                                              attr_num_value_pair=attr_num_value_pair)
+        elif table_kind == RelationKinds.HEAP_TABLE:
+            return update.UpdatePhysicalOperator(table_oid=table_oid, scan_operator=physical_query.children[0],
+                                             attr_num_value_pair=attr_num_value_pair)
+        else:
+            raise InitializationStageError(f'not supported table kind {table_kind}')
 
 
 class SemanticScanImplementation(BaseImplementation):

@@ -1,11 +1,11 @@
 import os
 from andb.catalog.oid import INVALID_OID, OID_SCANNING_FILE
-from andb.catalog.syscache import CATALOG_ANDB_ATTRIBUTE, CATALOG_ANDB_CLASS
+from andb.catalog.syscache import CATALOG_ANDB_ATTRIBUTE, CATALOG_ANDB_CLASS, CATALOG_ANDB_TYPE
 from andb.errno.errors import AnDBNotImplementedError, InitializationStageError
 from andb.executor.operator.logical import *
-from andb.executor.operator.physical.utility import CreateIndexOperator, CreateTableOperator, ExplainOperator, DropTableOperator, DropIndexOperator, CommandOperator
+from andb.executor.operator.physical.utility import CreateIndexOperator, CreateMemoryTableOperator, CreateTableOperator, ExplainOperator, DropTableOperator, DropMemoryTableOperator, DropIndexOperator, CommandOperator
 from andb.runtime import session_vars
-from andb.sql.parser.ast.create import CreateTable, CreateIndex
+from andb.sql.parser.ast.create import CreateTable, CreateIndex, CreateMemoryTable, DropMemoryTable
 from andb.sql.parser.ast.delete import Delete
 from andb.sql.parser.ast.drop import DropIndex, DropTable
 from andb.sql.parser.ast.explain import Explain
@@ -37,13 +37,25 @@ class UtilityTransformation(BaseTransformation):
                                                     fields=fields, database_oid=session_vars.SessionVars.database_oid,
                                                     index_type=ast.index_type)
         elif isinstance(ast, CreateTable):
-            physical_operator = CreateTableOperator(
-                table_name=ast.name.parts, fields=ast.columns, database_oid=session_vars.SessionVars.database_oid
-            )
+            if isinstance(ast, CreateMemoryTable):
+                physical_operator = CreateMemoryTableOperator(
+                    table_name=ast.name.parts, fields=ast.columns, 
+                    database_oid=session_vars.SessionVars.database_oid,
+                    temporary=ast.temporary
+                )
+            else:
+                physical_operator = CreateTableOperator(
+                    table_name=ast.name.parts, fields=ast.columns, database_oid=session_vars.SessionVars.database_oid
+                )
         elif isinstance(ast, DropTable):
-            physical_operator = DropTableOperator(
-                table_name=ast.name.parts, database_oid=session_vars.SessionVars.database_oid
-            )
+            if isinstance(ast, DropMemoryTable):
+                physical_operator = DropMemoryTableOperator(
+                    table_name=ast.name.parts, database_oid=session_vars.SessionVars.database_oid
+                )
+            else:
+                physical_operator = DropTableOperator(
+                    table_name=ast.name.parts, database_oid=session_vars.SessionVars.database_oid
+                )
         elif isinstance(ast, DropIndex):
             physical_operator = DropIndexOperator(
                 index_name=ast.name.parts, database_oid=session_vars.SessionVars.database_oid
@@ -533,8 +545,7 @@ class InsertTransformation(BaseTransformation):
     @staticmethod
     def on_transform(ast: Insert):
         table_oid = CATALOG_ANDB_CLASS.get_relation_oid(relation_name=ast.table.parts,
-                                                        database_oid=session_vars.SessionVars.database_oid,
-                                                        kind=RelationKinds.HEAP_TABLE)
+                                                        database_oid=session_vars.SessionVars.database_oid)
         if table_oid == INVALID_OID:
             raise InitializationStageError(f'cannot get oid for the table {ast.table.parts}.')
 
@@ -546,13 +557,15 @@ class InsertTransformation(BaseTransformation):
         for value in ast.values:
             row = [None for _ in range(len(attr_forms))]
             if isinstance(value, Constant):
-                row[0] = value.value
+                row[0] = CATALOG_ANDB_TYPE.get_type_form_by_oid(
+                    attr_forms[0].type_oid).format_value(value.value)
             elif isinstance(value, list):
                 for i, v in enumerate(value):
                     attr_num = attr_forms[i].num
-                    row[attr_num] = v.value
+                    row[attr_num] = CATALOG_ANDB_TYPE.get_type_form_by_oid(
+                        attr_forms[i].type_oid).format_value(v.value)
             else:
-                raise
+                raise NotImplementedError('not supported this syntax yet.')
             rows.append(row)
             for i in range(len(attr_forms)):
                 if row[i] is None and attr_forms[i].notnull:
@@ -596,13 +609,21 @@ class UpdateTransformation(BaseTransformation):
 
     @staticmethod
     def on_transform(ast: Update):
+        table_oid = CATALOG_ANDB_CLASS.get_relation_oid(relation_name=ast.table.parts,
+                                                        database_oid=session_vars.SessionVars.database_oid)
+        if table_oid == INVALID_OID:
+            raise InitializationStageError(f'cannot get oid for the table {ast.table.parts}.')
+    
         columns = []
         values = []
         for column_name, value_expr in ast.columns.items():
             columns.append(TableColumn(table_name=ast.table.parts,
                                        column_name=column_name))
+            # format the value to avoid type mismatch
+            attr_form = CATALOG_ANDB_ATTRIBUTE.get_table_attr(table_oid, column_name)
+            type_form = CATALOG_ANDB_TYPE.get_type_form_by_oid(attr_form.type_oid)
             if isinstance(value_expr, Constant):
-                values.append(value_expr.value)
+                values.append(type_form.format_value(value_expr.value))
             else:
                 raise NotImplementedError('not supported this syntax yet.')
         condition = ConditionTransformation.on_transform(Condition(ast.where))

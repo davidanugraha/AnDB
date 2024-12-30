@@ -161,6 +161,9 @@ class AndbClassTable(CatalogTable):
         
         #TODO: binary search for optimization
         if kind == RelationKinds.MEMORY_TABLE:
+            for memory_table in self.memory_tables:
+                if memory_table.name == name:
+                    raise DDLException('Cannot create a same name memory table.')
             self.memory_tables.append(AndbClassForm(oid=table_oid, name=name,
                                                     kind=kind, database_oid=database_oid))
             self.memory_tables.sort()
@@ -173,5 +176,23 @@ class AndbClassTable(CatalogTable):
             self.system_tables.append(AndbClassForm(oid=table_oid, name=name,
                                                     kind=kind, database_oid=database_oid))
             self.system_tables.sort()
+        return table_oid
+
+    def delete_by_kind(self, kind, oid):
+        if kind == RelationKinds.MEMORY_TABLE or kind == RelationKinds.TEMPORARY_TABLE:
+            for i, table in enumerate(self.memory_tables):
+                if table.oid == oid:
+                    self.memory_tables.pop(i)
+                    break
+        elif kind == RelationKinds.SYSTEM_TABLE:
+            for i, table in enumerate(self.system_tables):
+                if table.oid == oid:
+                    self.system_tables.pop(i)
+                    break
+        elif kind == RelationKinds.HEAP_TABLE:
+            self.delete(lambda r: r.oid == oid)
+        else:
+            raise ValueError(f'Invalid relation kind: {kind}')
+
 
 _ANDB_CLASS = AndbClassTable()

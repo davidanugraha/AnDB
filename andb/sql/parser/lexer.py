@@ -12,6 +12,7 @@ class SQLLexer(sly.Lexer):
         # DDL
         CREATE, DROP,
         DATABASE, TABLE, INDEX, VIEW, COLUMN, ALTER,
+        TEMPORARY, MEMORY,
 
         # Misc
         EXPLAIN, USING, IF_EXISTS,
@@ -63,6 +64,8 @@ class SQLLexer(sly.Lexer):
     VIEW = 'VIEW'
     COLUMN = 'COLUMN'
     ALTER = 'ALTER'
+    TEMPORARY = 'TEMPORARY'
+    MEMORY = 'MEMORY'
     EXPLAIN = 'EXPLAIN'
     USING = 'USING'
     IF_EXISTS = 'IF EXISTS'
