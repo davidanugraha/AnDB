@@ -10,7 +10,7 @@ class AndbAttributeForm(CatalogForm):
         'type_oid': 'bigint',
         'length': 'integer',
         'num': 'integer',
-        'notnull': 'boolean'
+        'notnull': 'boolean',
     }
 
     def __init__(self, class_oid, name, type_oid, length, num, notnull=False):

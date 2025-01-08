@@ -14,7 +14,7 @@ from andb.sql.parser.ast.join import Join
 from andb.sql.parser.ast.misc import Star
 from andb.sql.parser.ast.operation import Function
 from andb.sql.parser.ast.select import Select
-from andb.sql.parser.ast.semantic import Prompt, FileSource, SemanticSchemas, SemanticTabular
+from andb.sql.parser.ast.semantic import Prompt, FileSource, SemanticTabular
 from andb.sql.parser.ast.update import Update
 from andb.storage.engines.heap.relation import RelationKinds
 from andb.sql.parser.ast.utility import Command
@@ -187,7 +187,7 @@ class QueryLogicalPlanTransformation(BaseTransformation):
             return
         if len(aggregation_functions) > 1:
             raise NotImplementedError('not support one more aggregations.')
-
+        
         aggregation_function = aggregation_functions[0]
         groupby_columns = set(query.groupby_columns)
         groupby_columns.add(aggregation_function)
@@ -199,36 +199,6 @@ class QueryLogicalPlanTransformation(BaseTransformation):
         # set the group by operator onto all nodes.
         operator.children = query.children
         query.children = [operator]
-        
-    @staticmethod
-    def process_semantic_tabular(query: LogicalQuery):
-        # Check if there are any prompt columns in target list
-        semantic_schema_columns = [col for col in query.target_list if isinstance(col, SemanticSchemaColumn)]
-        if not semantic_schema_columns:
-            return
-
-        semantic_op = SemanticScanOperator(
-            schema=semantic_schema_columns,
-            children=query.children
-        )
-        # Replace query's children with semantic operator
-        query.children = [semantic_op]
-
-    @staticmethod
-    def process_semantic_transform(query: LogicalQuery):
-        # Check if there are any prompt columns in target list
-        prompt_columns = [col for col in query.target_list if isinstance(col, PromptColumn)]
-        if not prompt_columns:
-            return
-            
-        # Create semantic transform operator
-        semantic_op = SemanticTransformOperator(
-            columns=query.target_list,
-            children=query.children
-        )
-
-        # Replace query's children with semantic operator
-        query.children = [semantic_op]
 
     @staticmethod
     def on_transform(query: LogicalQuery):
@@ -239,10 +209,6 @@ class QueryLogicalPlanTransformation(BaseTransformation):
             QueryLogicalPlanTransformation.process_non_join_scan(query)
         else:
             QueryLogicalPlanTransformation.process_join_scan(query)
-
-        # Add semantic transform processing before other operations
-        QueryLogicalPlanTransformation.process_semantic_tabular(query)
-        QueryLogicalPlanTransformation.process_semantic_transform(query)
 
         #TODO: limit, ...
         if query.sort_clause:
@@ -317,6 +283,7 @@ class SelectTransformation(BaseTransformation):
 
     @classmethod
     def transform_from_clause(cls, ast_outer, query):
+        dont_add_table_as_scan = []
         def inner_transform(ast):
             unchecked_tables = []
             unchecked_files = []
@@ -328,15 +295,43 @@ class SelectTransformation(BaseTransformation):
             elif isinstance(ast, FileSource):
                 unchecked_files.append(ast.file_path.value)
             elif isinstance(ast, SemanticTabular):
-                semantic_schemas = ast.semantic_schemas
-                if not isinstance(semantic_schemas, SemanticSchemas):
-                    raise InitializationStageError("Invalid SemanticSchemas in SemanticTabular.")
-                for schema in semantic_schemas.schema_list:
-                    if not isinstance(schema, tuple) or len(schema) != 2 or len(schema[1]) != 2:
-                        raise InitializationStageError(f"Invalid schema definition: {schema}")
-
                 # Process the table source within the SemanticTabular
+                inner_transform(ast.identifier)
                 inner_transform(ast.table_source)
+                
+                semantic_schemas = ast.semantic_schemas
+                table_name = ast.identifier.parts
+                prompt_columns = []
+                for prompt_col, attr_form in zip(semantic_schemas, query.table_attr_forms[table_name]):
+                    if not isinstance(prompt_col, Prompt):
+                        raise InitializationStageError(f"Invalid schema definition: {prompt_col}")
+
+                    column = PromptColumn(
+                        table_name=table_name,
+                        column_name=attr_form.name,
+                        prompt_text=prompt_col.prompt_text
+                    )
+                    prompt_columns.append(column)
+                
+                # Don't add temp table or source table as scan, it's already created below
+                table_source_scan = None
+                if isinstance(ast.table_source, FileSource):
+                    # Currently only support for file
+                    file_path = ast.table_source.file_path.value
+                    table_source_scan = ScanOperator(file_path, table_oid=query.from_tables[file_path])
+                    dont_add_table_as_scan.append(file_path)
+                else:
+                    raise InitializationStageError(f"Source not file is not supported currently...")
+                dont_add_table_as_scan.append(ast.identifier.parts)
+                
+                if table_source_scan is not None:
+                    table_source_scan = [table_source_scan]
+
+                semantic_op = SemanticScanOperator(
+                    schema=prompt_columns,
+                    children=table_source_scan
+                )
+                query.scan_operators.append(semantic_op)
             else:
                 raise NotImplementedError()
 
@@ -351,7 +346,7 @@ class SelectTransformation(BaseTransformation):
 
             for file_path in unchecked_files:
                 # scan the file from current working director
-                real_file_path = os.path.join(os.path.realpath('./files'), file_path)
+                real_file_path = os.path.join(os.path.realpath(f'./base/{session_vars.SessionVars.database_oid}/files'), file_path)
                 if os.path.exists(real_file_path):
                     query.from_tables[file_path] = OID_SCANNING_FILE
                     query.table_attr_forms[file_path] = CATALOG_ANDB_ATTRIBUTE.get_table_forms(OID_SCANNING_FILE)
@@ -361,7 +356,9 @@ class SelectTransformation(BaseTransformation):
         inner_transform(ast_outer)
         # scan operator
         for name_or_path in query.from_tables:
-            query.scan_operators.append(ScanOperator(name_or_path, table_oid=query.from_tables[name_or_path]))
+            # Don't add TempTable by SemanticTabular as ScanOperator
+            if name_or_path not in dont_add_table_as_scan:
+                query.scan_operators.append(ScanOperator(name_or_path, table_oid=query.from_tables[name_or_path]))
 
     @classmethod
     def transform_target_list(cls, ast, query):
@@ -369,12 +366,14 @@ class SelectTransformation(BaseTransformation):
             # parse star
             if isinstance(target, Star):
                 for table_name in query.from_tables:
-                    for attr_form in query.table_attr_forms[table_name]:
-                        table_column = TableColumn(table_name, attr_form.name)
-                        if target.alias:
-                            table_column.alias = target.alias.parts
-                        query.target_list.append(table_column)
-                        query.add_seen_table_column(table_column)
+                    if query.from_tables[table_name] != OID_SCANNING_FILE:
+                        # Skip file's attributes, which is content and embedding
+                        for attr_form in query.table_attr_forms[table_name]:
+                            column = TableColumn(table_name, attr_form.name)
+                            if target.alias:
+                                column.alias = target.alias.parts
+                            query.target_list.append(column)
+                            query.add_seen_table_column(column)
             elif isinstance(target, Identifier) and '.' in target.parts:
                 items = target.parts.split('.')
                 if len(items) != 2:
@@ -386,24 +385,33 @@ class SelectTransformation(BaseTransformation):
                 for attr_form in query.table_attr_forms[table_name]:
                     if attr_form.name == column_name:
                         found = True
+                        column = TableColumn(table_name, column_name)
                         break
                 if not found:
                     raise InitializationStageError(f"not found '{target.parts}'.")
-                table_column = TableColumn(table_name, column_name)
                 if target.alias:
-                    table_column.alias = target.alias.parts
-                query.target_list.append(table_column)
-                query.add_seen_table_column(table_column)
+                    column.alias = target.alias.parts
+                query.target_list.append(column)
+                query.add_seen_table_column(column)
             elif isinstance(target, Identifier):
                 target_column_name = target.parts
                 target_table_name = cls._find_table_name(query, target_column_name)
                 if target_table_name is None:
+                    # TODO: What if there are multiple target_table_name, then it's invalid?
                     raise InitializationStageError(f"not found '{target.parts}'.")
-                table_column = TableColumn(target_table_name, target_column_name)
-                if target.alias:
-                    table_column.alias = target.alias.parts
-                query.target_list.append(table_column)
-                query.add_seen_table_column(table_column)
+                found = False
+                for attr_form in query.table_attr_forms[target_table_name]:
+                    if attr_form.name == target_column_name:
+                        found = True
+                        column = TableColumn(target_table_name, target_column_name)
+                        break
+                if not found:
+                    raise InitializationStageError(f"not found '{target.parts}'.")
+                else:
+                    if target.alias:
+                        column.alias = target.alias.parts
+                    query.target_list.append(column)
+                    query.add_seen_table_column(column)
             elif isinstance(target, Function):
                 #TODO: multiple parameters
                 table_columns = []

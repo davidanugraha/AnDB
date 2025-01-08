@@ -18,7 +18,7 @@ from .ast.misc import Constant, Star, Tuple
 from .exception import ParsingException
 from .ast.drop import DropTable, DropIndex
 from .ast.utility import Command
-from .ast.semantic import FileSource, Prompt, SemanticSchemas, SemanticTabular
+from .ast.semantic import FileSource, Prompt, SemanticTabular
 
 
 def check_select_keywords(select, operation):
@@ -629,26 +629,29 @@ class SQLParser(sly.Parser):
     #     # Handle negative expressions
     #     return BinaryOperation(op='*', args=(Constant(value=-1), p.expr))
 
-    # Add new parsing rules
-    @_('PROMPT LPAREN expr RPAREN')
+    # Add new parsing rules  
+    @_('PROMPT LPAREN expr RPAREN',
+       'PROMPT LPAREN expr RPAREN AS defined_column')
     def expr(self, p):
-        return Prompt(p.expr)
+        defined_column = getattr(p, "defined_column", None)
+        return Prompt(p.expr, defined_column)
     
     @_('string AS defined_column')
     def expr(self, p):
         return (p.string, p.defined_column)
+    
+    @_('expr AS defined_column')
+    def expr(self, p):
+        return (p.expr, p.defined_column)
         
     @_('FILE LPAREN expr RPAREN')
     def from_table(self, p):
         return FileSource(p.expr)
     
-    # SCHEMAS definition
-    @_('SCHEMAS LPAREN expr_list RPAREN')
-    def from_semantic_schemas(self, p):
-        return SemanticSchemas(p.expr_list)
-    
-    @_('TABULAR LPAREN from_semantic_schemas FROM from_table RPAREN',
-       'TABULAR LPAREN from_semantic_schemas FROM join_tables_implicit RPAREN',
-       'TABULAR LPAREN from_semantic_schemas FROM from_table_aliased RPAREN')
+    @_('TABULAR LPAREN expr_list FROM from_table RPAREN identifier',
+       'TABULAR LPAREN expr_list FROM join_tables_implicit RPAREN identifier',
+       'TABULAR LPAREN expr_list FROM from_table_aliased RPAREN identifier')
     def from_tabular(self, p):
-        return SemanticTabular(semantic_schemas=p.from_semantic_schemas, table_source=p[4])
+        return SemanticTabular(identifier=p.identifier,
+                               expr_list=p.expr_list,
+                               table_source=p[4])

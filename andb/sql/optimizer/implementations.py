@@ -236,6 +236,8 @@ class QueryImplementation(BaseImplementation):
             new_node = SortImplementation.on_implement(node)
         elif AggregationImplementation.match(node):
             new_node = AggregationImplementation.on_implement(node)
+        elif SemanticScanImplementation.match(node):
+            new_node = SemanticScanImplementation.on_implement(node)
         elif SemanticTransformImplementation.match(node):
             new_node = SemanticTransformImplementation.on_implement(node)
         else:

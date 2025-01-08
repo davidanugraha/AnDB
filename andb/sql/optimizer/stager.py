@@ -1,0 +1,60 @@
+from andb.sql.parser import andb_query_parse
+from andb.sql.parser.ast.semantic import Prompt, FileSource, SemanticTabular
+
+SETUP = "SETUP"
+MAIN_QUERY = "MAIN_QUERY"
+CLEANUP = "CLEANUP"
+
+class Stage:
+    def __init__(self, stage_type, ast, cleanup_ast=None):
+        self.stage_type = stage_type
+        self.ast = ast
+        self.cleanup_ast = cleanup_ast  # Optional cleanup AST
+        self._executed = False
+        
+    def is_success(self):
+        return self._executed
+
+    def mark_success(self):
+        self._executed = True
+        
+    def get_ast(self):
+        return self.ast
+    
+    def get_cleanup_ast(self):
+        return self.cleanup_ast
+        
+    def has_output(self):
+        return self.stage_type == MAIN_QUERY
+
+def _create_temp_table_stage(semantic_tabular):
+    # Modify the main query AST to reference the temporary table
+    temp_table_name = semantic_tabular.identifier.parts
+    columns_definition = []
+    for prompt_col in semantic_tabular.semantic_schemas:
+        assert(isinstance(prompt_col, Prompt) and len(prompt_col.defined_column) == 2)
+        field_name, field_type = prompt_col.defined_column
+        columns_definition.append(f"{field_name} {field_type}")
+    columns_definition_str = ", ".join(columns_definition)
+        
+    create_temp_table_query = f"CREATE TEMPORARY TABLE {temp_table_name} ({columns_definition_str})" # TODO: Is this dangerous?
+    create_table_ast = andb_query_parse(create_temp_table_query)
+    
+    drop_temp_table_query = f"DROP TEMPORARY TABLE {temp_table_name}" # TODO: Is this dangerous?
+    drop_table_ast = andb_query_parse(drop_temp_table_query)
+
+    return Stage(stage_type=SETUP, ast=create_table_ast, cleanup_ast=drop_table_ast)
+
+def _create_main_query_stage(ast):
+    return Stage(stage_type=MAIN_QUERY, ast=ast)
+
+def andb_decompose_ast(original_ast):
+    """Decompose the original AST into multiple stages.""" # TODO: Generalize
+    list_stages = []
+    if hasattr(original_ast, "from_table") and isinstance(original_ast.from_table, SemanticTabular):
+        list_stages.append(_create_temp_table_stage(original_ast.from_table))
+        list_stages.append(_create_main_query_stage(original_ast))
+    else:
+        list_stages.append(_create_main_query_stage(original_ast))
+        
+    return list_stages

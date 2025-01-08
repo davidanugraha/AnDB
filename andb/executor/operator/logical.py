@@ -106,27 +106,27 @@ class FunctionColumn(AbstractColumn):
 
 
 class PromptColumn(AbstractColumn):
-    def __init__(self, prompt_text):
+    def __init__(self, table_name, column_name, prompt_text):
         super().__init__()
+        self.table_name = table_name
+        self.column_name = column_name
         self.prompt_text = prompt_text
-        self.table_name = DummyTableName.TEMP_TABLE_NAME
-        self.column_name = 'prompt'
         self.function_name = None
         self.alias = None
 
     def __repr__(self):
-        return f'PROMPT'
+        return f'{self.column_name}'
 
     def __eq__(self, other):
         if not isinstance(other, PromptColumn):
             return False
-        return self.prompt_text == other.prompt_text
+        return f'{self.table_name}.{self.column_name}: {self.prompt_text}' == f'{other.table_name}.{other.column_name}: {other.prompt_text}'
 
     def __hash__(self):
         return hash((self.prompt_text))
 
     def core(self):
-        return PromptColumn(self.prompt_text)
+        return PromptColumn(self.table_name, self.prompt_text, self.column_name)
     
 class SemanticSchemaColumn(AbstractColumn):
     def __init__(self, prompt_text, column_name, column_type):

@@ -291,24 +291,36 @@ class SemanticScan(PhysicalOperator):
             intermediate_data: Intermediate output (for debugging purposes between 'json' and 'tabular')
         """
         super().__init__('SemanticScan')
-        self.schema = schema
+        self._convert_prompt_columns_to_schema(schema)
         self.client_model = default_client_model()
         self.intermediate_data = intermediate_data
         if self.intermediate_data not in ["json", "tabular"]:
             raise NotImplementedError(f"Intermediate data `{self.intermediate_data}` is not implemented!")
 
         self.document = None
+        self.embeddings = None
         self.stream = None
-        self.columns = None
+        self.result_tuples = None
 
     def open(self):
         if len(self.children) != 1:
             raise ValueError("SemanticScan requires exactly one input operator")
         self.children[0].open()
         super().open()
+        
+    def _convert_prompt_columns_to_schema(self, raw_schema):
+        # Extract schema from PromptColumns
+        schema_lines = []
+        self.columns = []
+        for column in raw_schema:  # Assuming self.query.schema contains PromptColumn instances
+            if isinstance(column, PromptColumn):
+                schema_lines.append(f"{column.column_name}: Extract '{column.prompt_text}'")
+                self.columns.append(column)
 
-    @staticmethod
-    def _parse_json(output):
+        # Combine into a formatted schema
+        self.schema = "\n".join(schema_lines)
+
+    def _parse_json(self, output):
         try:
             # Try parsing directly first
             return json.loads(output)
@@ -386,53 +398,59 @@ class SemanticScan(PhysicalOperator):
         Returns:
             Dataframe
         """
-        temperature = 0.1
-        prompt_schema = f"Schema: {self.schema}"
-        table_tuples = []
-        self.document = self.children[0].next()  # Assume child is Scan
-
-        if self.intermediate_data == 'json':
-            prompt_system = """
-            You are a data extraction assistant.
-            Your task is to extract structured information from unstructured text and format it into JSON.
-            Follow the provided schema exactly.
-            """
-
-            messages = [
-                {"role": "system", "content": prompt_system},
-                {"role": "user", "content": f"""
-                Convert the following raw text into a JSON array using this schema: '{prompt_schema}'.
-                Ensure the response starts with '[' and ends with ']', with no additional text or explanation.
-                Missing or empty values should be represented as null. 
+        if self.result_tuples is None:
+            temperature = 0.1
+            self.document = ""
+            for doc, embed in self.children[0].next():
+                self.document += doc  # Assume child is Scan; only take the document, not embedding
+                self.document += "\n"
                 
-                Raw text:
-                {self.document}
-                """}
-            ]
-            response = self.client_model.complete_messages(messages, temperature=temperature)
-            table_tuples = self._parse_json_into_tuples(response)
+            if self.intermediate_data == 'json':
+                prompt_system = """
+                You are a data extraction assistant.
+                Your task is to extract structured information from unstructured text and format it into JSON.
+                Follow the provided schema exactly.
+                """
 
-        else:
-            prompt_system = """
-            You are a data extraction assistant.
-            Your task is to extract structured information from unstructured text and format it into a row-based tabular format.
-            Follow the provided schema exactly and ensure the output adheres to the specified structure.
-            """
+                messages = [
+                    {"role": "system", "content": prompt_system},
+                    {"role": "user", "content": f"""
+                    Convert the following raw text into a JSON array using this schema:
+                    {self.schema}
+                    
+                    Ensure the response starts with '[' and ends with ']', with no additional text or explanation.
+                    Missing or empty values should be represented as null. 
+                    
+                    Raw text:
+                    {self.document}
+                    """}
+                ]
+                response = self.client_model.complete_messages(messages, temperature=temperature)
+                self.result_tuples = self._parse_json_into_tuples(response)
 
-            messages = [
-                {"role": "system", "content": prompt_system},
-                {"role": "user", "content": f"""
-                Convert the following raw text into a row-based tabular format with `|` as the delimitter, and use this schema: '{prompt_schema}'.
-                Do not include any additional text or explanation outside the table.
-                
-                Raw text:
-                {self.document}
-                """}
-            ]
-            response = self.client_model.complete_messages(messages, temperature=temperature)
-            table_tuples = self._parse_markdown_into_tuples(response)
+            else:
+                prompt_system = """
+                You are a data extraction assistant.
+                Your task is to extract structured information from unstructured text and format it into a row-based tabular format.
+                Follow the provided schema exactly and ensure the output adheres to the specified structure.
+                """
 
-        for tup in table_tuples:
+                messages = [
+                    {"role": "system", "content": prompt_system},
+                    {"role": "user", "content": f"""
+                    Convert the following raw text into a row-based tabular format with `|` as the delimitter, and use this schema:
+                    {self.schema}
+                    
+                    Do not include any additional text or explanation outside the table.
+                    
+                    Raw text:
+                    {self.document}
+                    """}
+                ]
+                response = self.client_model.complete_messages(messages, temperature=temperature)
+                self.result_tuples = self._parse_markdown_into_tuples(response)
+
+        for tup in self.result_tuples:
             yield tup
 
     def close(self):
