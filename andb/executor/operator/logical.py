@@ -177,6 +177,23 @@ class VirtualColumn(AbstractColumn):
     def core(self):
         return VirtualColumn(self.column_name)
 
+
+class SemanticCondition(LogicalOperator):
+    def __init__(self, operation, children=None):
+        super().__init__('SemanticExpression', children)
+        assert (len(operation.columns) > 0)
+        self.expr = operation.prompt_text
+        self.table_columns = operation.columns
+
+        for label in self.table_columns:
+            items = self.table_columns[label].parts.split('.')
+            if len(items) < 2:
+                raise Exception("Semantic Match condition must include the table name")
+            if len(items) == 2:
+                self.table_columns[label] = TableColumn(table_name=items[0], column_name=items[1])
+            elif len(items) == 1:
+                self.table_columns[label] = TableColumn(table_name=None, column_name=items[0])
+
 class Condition(LogicalOperator):
     def __init__(self, operation, children=None):
         super().__init__('Expression', children)
@@ -256,7 +273,7 @@ class LogicalQuery(LogicalOperator):
         self.join_operators = []
         self.groupby_columns = []
         self.having_clause = None
-        self.scan_operators = []
+        self.scan_operators = {}
         self.sort_clause = None
         self.target_list = []
         self.condition = None
@@ -323,7 +340,7 @@ class SelectionOperator(LogicalOperator):
 
 
 class JoinOperator(LogicalOperator):
-    def __init__(self, join_condition: Condition, join_type, table_columns=None, children=None):
+    def __init__(self, join_condition, join_type, table_columns=None, children=None):
         super().__init__('Join', children)
         self.join_condition = join_condition
         self.join_type = join_type

@@ -1,6 +1,7 @@
 from andb.sql.parser import andb_query_parse
 from andb.sql.parser.ast.explain import Explain
 from andb.sql.parser.ast.semantic import Prompt, FileSource, SemanticTabular
+from andb.sql.parser.ast.join import Join, JoinType
 
 SETUP = "SETUP"
 MAIN_QUERY = "MAIN_QUERY"
@@ -49,23 +50,30 @@ def _create_temp_table_stage(semantic_tabular):
 def _create_main_query_stage(ast):
     return Stage(stage_type=MAIN_QUERY, ast=ast)
 
+def _create_join_stages(semantic_join:Join, list_stages:list):
+    if isinstance(semantic_join.left, Join):
+        _create_join_stages(semantic_join.left, list_stages)
+    elif isinstance(semantic_join.left, SemanticTabular):
+        list_stages.append(_create_temp_table_stage(semantic_join.left))
+    
+    if isinstance(semantic_join.right, SemanticTabular):
+        list_stages.append(_create_temp_table_stage(semantic_join.right))
+
 def andb_decompose_ast(original_ast):
     """Decompose the original AST into multiple stages.""" # TODO: Generalize
     list_stages = []
 
     if isinstance(original_ast, Explain):
         curr_ast = original_ast.target
-        if hasattr(curr_ast, "from_table") and isinstance(curr_ast.from_table, SemanticTabular):
-            list_stages.append(_create_temp_table_stage(curr_ast.from_table))
-            list_stages.append(_create_main_query_stage(original_ast))
-        else:
-            list_stages.append(_create_main_query_stage(original_ast))
     else:
         curr_ast = original_ast
-        if hasattr(curr_ast, "from_table") and isinstance(curr_ast.from_table, SemanticTabular):
+
+    if hasattr(curr_ast, "from_table"):
+        if isinstance(curr_ast.from_table, SemanticTabular):
             list_stages.append(_create_temp_table_stage(curr_ast.from_table))
-            list_stages.append(_create_main_query_stage(curr_ast))
-        else:
-            list_stages.append(_create_main_query_stage(curr_ast))
+        elif isinstance(curr_ast.from_table, Join):
+            _create_join_stages(curr_ast.from_table, list_stages)
+
+    list_stages.append(_create_main_query_stage(original_ast))
         
     return list_stages

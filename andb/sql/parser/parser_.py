@@ -18,7 +18,7 @@ from .ast.misc import Constant, Star, Tuple
 from .exception import ParsingException
 from .ast.drop import DropTable, DropIndex
 from .ast.utility import Command
-from .ast.semantic import FileSource, Prompt, SemanticTabular, SemanticGroup
+from .ast.semantic import FileSource, Prompt, SemanticTabular, SemanticGroup, SemanticMatch
 
 
 def check_select_keywords(select, operation):
@@ -226,14 +226,27 @@ class SQLParser(sly.Parser):
                     right=p[2],
                     join_type=p.join_clause)
 
-    @_('from_table_aliased join_clause from_table_aliased ON expr',
-       'join_tables join_clause from_table_aliased ON expr')
+    @_( 'from_table_aliased join_clause from_table_aliased ON expr',
+        'join_tables join_clause from_table_aliased ON expr')
     def join_tables(self, p):
         return Join(left=p[0],
                     right=p[2],
                     join_type=p.join_clause,
                     condition=p.expr)
+    
+    @_( 'from_tabular join_clause from_tabular ON semantic_match',
+        'join_tables join_clause from_tabular ON semantic_match')
+    def join_tables(self, p):
+        return Join(left=p[0],
+                    right=p[2],
+                    join_type=p.join_clause,
+                    condition=p.semantic_match,
+                    is_semantic=True)
 
+    @_('SEMANTIC_MATCH LPAREN string RPAREN')
+    def semantic_match(self, p):
+        return SemanticMatch(p[2])
+    
     @_('from_table_aliased COMMA from_table_aliased',
        'join_tables_implicit COMMA from_table_aliased')
     def join_tables_implicit(self, p):
