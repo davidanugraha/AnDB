@@ -1,4 +1,5 @@
 from andb.sql.parser import andb_query_parse
+from andb.sql.parser.ast.explain import Explain
 from andb.sql.parser.ast.semantic import Prompt, FileSource, SemanticTabular
 
 SETUP = "SETUP"
@@ -51,10 +52,20 @@ def _create_main_query_stage(ast):
 def andb_decompose_ast(original_ast):
     """Decompose the original AST into multiple stages.""" # TODO: Generalize
     list_stages = []
-    if hasattr(original_ast, "from_table") and isinstance(original_ast.from_table, SemanticTabular):
-        list_stages.append(_create_temp_table_stage(original_ast.from_table))
-        list_stages.append(_create_main_query_stage(original_ast))
+
+    if isinstance(original_ast, Explain):
+        curr_ast = original_ast.target
+        if hasattr(curr_ast, "from_table") and isinstance(curr_ast.from_table, SemanticTabular):
+            list_stages.append(_create_temp_table_stage(curr_ast.from_table))
+            list_stages.append(_create_main_query_stage(original_ast))
+        else:
+            list_stages.append(_create_main_query_stage(original_ast))
     else:
-        list_stages.append(_create_main_query_stage(original_ast))
+        curr_ast = original_ast
+        if hasattr(curr_ast, "from_table") and isinstance(curr_ast.from_table, SemanticTabular):
+            list_stages.append(_create_temp_table_stage(curr_ast.from_table))
+            list_stages.append(_create_main_query_stage(curr_ast))
+        else:
+            list_stages.append(_create_main_query_stage(curr_ast))
         
     return list_stages

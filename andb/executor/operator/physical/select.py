@@ -487,7 +487,7 @@ class FileScan(PhysicalOperator):
         if self.file_path[-3:] != 'txt':
             raise NotImplementedError(f"File {self.file_path} is not supported")
 
-        real_file_path = os.path.join(os.path.realpath('./files'), self.file_path)
+        real_file_path = os.path.join(os.path.realpath(f'./base/{session_vars.SessionVars.database_oid}/files'), self.file_path)
 
         self.fd = open(real_file_path, 'r', errors='ignore')
 

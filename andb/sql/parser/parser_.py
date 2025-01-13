@@ -18,7 +18,7 @@ from .ast.misc import Constant, Star, Tuple
 from .exception import ParsingException
 from .ast.drop import DropTable, DropIndex
 from .ast.utility import Command
-from .ast.semantic import FileSource, Prompt, SemanticTabular
+from .ast.semantic import FileSource, Prompt, SemanticTabular, SemanticGroup
 
 
 def check_select_keywords(select, operation):
@@ -655,3 +655,9 @@ class SQLParser(sly.Parser):
         return SemanticTabular(identifier=p.identifier,
                                expr_list=p.expr_list,
                                table_source=p[4])
+        
+    @_('SEM_GROUP LPAREN identifier COMMA expr COMMA integer RPAREN',
+       'SEM_GROUP LPAREN identifier COMMA expr COMMA integer RPAREN AS identifier')
+    def expr(self, p):
+        alias = getattr(p, 'identifier1', None)
+        return SemanticGroup(identifier=p.identifier0, prompt=p.expr, k=p.integer, alias=alias)

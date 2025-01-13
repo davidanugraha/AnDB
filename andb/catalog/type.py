@@ -17,6 +17,16 @@ _VARIABLE_TYPE_CTYPE = cstructure.CTYPE_TYPE_INT4
 def generic_cmp(a, b):
     return a - b
 
+class AndbNull:
+    def __str__(self):
+        return "null"
+    
+    def __repr__(self):
+        return "AndbNull()"
+    
+    def __bool__(self):
+        return False
+
 
 class AndbBaseType:
     oid = INVALID_OID

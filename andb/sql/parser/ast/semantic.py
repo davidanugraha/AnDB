@@ -19,3 +19,17 @@ class SemanticTabular(ASTNode):
         self.semantic_schemas = expr_list
         self.table_source = table_source
         self.identifier = identifier
+        
+class SemanticGroup(ASTNode):
+    def __init__(self, identifier, prompt, k, alias, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.identifier = identifier
+        self.prompt = prompt
+        self.k = k
+        self.alias = alias
+        
+class SemanticFilter(ASTNode):
+    def __init__(self, identifier, prompt, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.identifier = identifier
+        self.prompt = prompt

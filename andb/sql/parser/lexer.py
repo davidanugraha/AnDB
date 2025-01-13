@@ -53,6 +53,7 @@ class SQLLexer(sly.Lexer):
         PROMPT,
         FILE,
         TABULAR,
+        SEM_GROUP,
     }
 
     CREATE = 'CREATE'
@@ -106,6 +107,7 @@ class SQLLexer(sly.Lexer):
     PROMPT = 'PROMPT'
     FILE = 'FILE'
     TABULAR = 'TABULAR'
+    SEM_GROUP = 'SEM_GROUP'
 
     DOT = r'\.'
     COMMA = r','

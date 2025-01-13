@@ -51,7 +51,7 @@ class HFAPIEmbeddingModel(EmbeddingModel):
     def __init__(self, config):
         from huggingface_hub import InferenceClient
 
-        self.client = InferenceClient(api_key=config.get("hf_api_key") or os.getenv('HF_API_KEY'))
+        self.client = InferenceClient(api_key=config.get("hf_token") or os.getenv('HF_TOKEN'))
         self.model = config.get("embed_hf_repo_id")
 
     def generate_embeddings(self, text):
@@ -81,6 +81,7 @@ class OfflineEmbeddingModel(EmbeddingModel):
 
         self.model = SentenceTransformer(
             config.get("embed_offline_model_path"),
+            token=config.get("hf_token") or os.getenv('HF_TOKEN'),
             device=config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
         )
 

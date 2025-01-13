@@ -1,5 +1,3 @@
-import json
-
 from andb.catalog.oid import INVALID_OID, OID_SCANNING_FILE, OID_TEMP_TABLE
 from andb.catalog.syscache import CATALOG_ANDB_CLASS, CATALOG_ANDB_INDEX, CATALOG_ANDB_ATTRIBUTE
 from andb.errno.errors import InitializationStageError
@@ -349,10 +347,10 @@ class SemanticScanImplementation(BaseImplementation):
     @classmethod
     def on_implement(cls, old_operator: SemanticScanOperator):
         return semantic.SemanticScan(
-            schema=old_operator.schema,
+            target_columns=old_operator.table_columns,
+            prompt_columns=old_operator.prompt_columns,
             intermediate_data="json",
         )
-
 
 class SemanticTransformImplementation(BaseImplementation):
     @classmethod
@@ -367,7 +365,6 @@ class SemanticTransformImplementation(BaseImplementation):
             target_columns=old_operator.columns,
             # Pass through any filter conditions
         )
-
 
 _all_implementations = [impl() for impl in BaseImplementation.__subclasses__()]
 

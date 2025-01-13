@@ -14,7 +14,7 @@ from andb.sql.parser.ast.join import Join
 from andb.sql.parser.ast.misc import Star
 from andb.sql.parser.ast.operation import Function
 from andb.sql.parser.ast.select import Select
-from andb.sql.parser.ast.semantic import Prompt, FileSource, SemanticTabular
+from andb.sql.parser.ast.semantic import Prompt, FileSource, SemanticTabular, SemanticGroup
 from andb.sql.parser.ast.update import Update
 from andb.storage.engines.heap.relation import RelationKinds
 from andb.sql.parser.ast.utility import Command
@@ -188,12 +188,33 @@ class QueryLogicalPlanTransformation(BaseTransformation):
         if len(aggregation_functions) > 1:
             raise NotImplementedError('not support one more aggregations.')
         
+        # If query's groupby columns contain semantic groupby, add a semantictransform as child operator
+        semantic_groupby_columns = []
+        reg_groupby_columns = []
+        for gb_col in query.groupby_columns:
+            if isinstance(gb_col, SemanticTransformColumn):
+                semantic_groupby_columns.append(gb_col)
+                target_table_name = None
+                for attr_form in query.table_attr_forms[gb_col.table_name]:
+                    if attr_form.name == gb_col.column_name:
+                        target_table_name = gb_col.table_name
+                        break
+                if target_table_name is None:
+                    reg_groupby_columns.append(VirtualColumn(gb_col.column_name))
+                else:
+                    reg_groupby_columns.append(TableColumn(target_table_name, gb_col.column_name))
+            else:
+                reg_groupby_columns.append(gb_col)
+        if len(semantic_groupby_columns) != 0:
+            operator = SemanticTransformOperator(semantic_groupby_columns, query.children)
+            query.children = [operator]
+        
         aggregation_function = aggregation_functions[0]
-        groupby_columns = set(query.groupby_columns)
+        groupby_columns = set(reg_groupby_columns)
         groupby_columns.add(aggregation_function)
         if groupby_columns != set(query.target_list):
             raise InitializationStageError('not found all columns are in the group by list.')
-        operator = GroupOperator(group_by_columns=query.groupby_columns,
+        operator = GroupOperator(group_by_columns=reg_groupby_columns,
                                  aggregate_function=aggregation_function,
                                  having_clause=query.having_clause)
         # set the group by operator onto all nodes.
@@ -328,7 +349,7 @@ class SelectTransformation(BaseTransformation):
                     table_source_scan = [table_source_scan]
 
                 semantic_op = SemanticScanOperator(
-                    schema=prompt_columns,
+                    prompt_columns=prompt_columns,
                     children=table_source_scan
                 )
                 query.scan_operators.append(semantic_op)
@@ -398,7 +419,8 @@ class SelectTransformation(BaseTransformation):
                 target_table_name = cls._find_table_name(query, target_column_name)
                 if target_table_name is None:
                     # TODO: What if there are multiple target_table_name, then it's invalid?
-                    raise InitializationStageError(f"not found '{target.parts}'.")
+                    query.unchecked_columns.append(target_column_name)
+                    continue
                 found = False
                 for attr_form in query.table_attr_forms[target_table_name]:
                     if attr_form.name == target_column_name:
@@ -510,11 +532,33 @@ class SelectTransformation(BaseTransformation):
     def transform_group_clause(cls, ast, query):
         if ast.group_by:
             for id_ in ast.group_by:
-                column_name = id_.parts
-                table_name = cls._find_table_name(query, column_name)
-                table_column = TableColumn(table_name, column_name)
-                query.groupby_columns.append(table_column)
-                query.add_seen_table_column(table_column)
+                if isinstance(id_, SemanticGroup):
+                    # Find the column that this GroupBy is referring to, and then add as GroupByColumn
+                    column_alias = id_.alias.parts
+                    original_column = id_.identifier.parts # TODO: Support multiple identifiers
+                    table_name = cls._find_table_name(query, original_column)
+                    if table_name is None:
+                        raise InitializationStageError(f"not found '{original_column}'.")
+                    if not isinstance(id_.prompt, Prompt):
+                        raise InitializationStageError(f"SemanticGroupBy is not provided with prompt.")
+                    semantic_column = SemanticTransformColumn(table_name, [original_column], column_alias,
+                                                              id_.prompt.prompt_text, id_.k)
+                    query.groupby_columns.append(semantic_column)
+                    
+                    if column_alias in query.unchecked_columns:
+                        table_column = VirtualColumn(column_alias)
+                        query.unchecked_columns.remove(column_alias)
+                        query.target_list.append(table_column)
+                    else:
+                        table_column = TableColumn(table_name, column_alias)
+                        
+                    query.add_seen_table_column(table_column)
+                else:
+                    column_name = id_.parts
+                    table_name = cls._find_table_name(query, column_name)
+                    table_column = TableColumn(table_name, column_name)
+                    query.groupby_columns.append(table_column)
+                    query.add_seen_table_column(table_column)
 
         if ast.having:
             if not ast.group_by:
@@ -533,6 +577,10 @@ class SelectTransformation(BaseTransformation):
         cls.transform_join_clause(ast.from_table, query)
         cls.transform_order_clause(ast.order_by, query)
         cls.transform_group_clause(ast, query)  # we need to pass both ast.group_by and ast.having
+        
+        # Unchecked column still exists
+        if len(query.unchecked_columns) > 0:
+            raise InitializationStageError(f"not found '{query.unchecked_columns[0]}'.")
 
         #TODO: distinct
         #TODO: limit

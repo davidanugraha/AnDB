@@ -5,8 +5,9 @@ from andb.common.tabular_format import TabularFormat
 from andb.catalog.attribute import AndbAttributeForm
 from andb.catalog import CATALOG_ANDB_TYPE
 from andb.catalog.oid import INVALID_OID, OID_TEMP_TABLE
+from andb.catalog.type import AndbNull
 from andb.catalog.syscache import CATALOG_ANDB_ATTRIBUTE, get_attribute_by_name
-from andb.executor.operator.logical import PromptColumn, TableColumn, FunctionColumn
+from andb.executor.operator.logical import PromptColumn, TableColumn, FunctionColumn, VirtualColumn
 from andb.sql.parser import CmdType
 from andb.runtime import session_vars
 
@@ -154,10 +155,16 @@ class ExecutionPortal:
                     to_be_defined_fields.append((column.standard_name, INVALID_OID, 0, True))
                 elif isinstance(column, PromptColumn):
                     to_be_defined_fields.append((column.standard_name, CATALOG_ANDB_TYPE.get_type_oid("text"), 0, True))
+                elif isinstance(column, VirtualColumn):
+                    to_be_defined_fields.append((column.column_name, CATALOG_ANDB_TYPE.get_type_oid("text"), 0, False))
 
             rv.define_fields(to_be_defined_fields)
             # directly assigned? maybe a not good form but easier
-            rv.tuples = self._results
+            rv.tuples = [
+                tuple(AndbNull() if item is None else item for item in row)
+                for row in self._results
+            ]
+            
             rv.effect_rows = len(self._results)
             return rv
         elif self.cmd_type in (CmdType.CMD_INSERT,

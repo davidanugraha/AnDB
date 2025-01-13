@@ -56,7 +56,7 @@ class HFAPIModel(ClientModel):
     def __init__(self, config):
         from huggingface_hub import InferenceClient
 
-        self.client = InferenceClient(api_key=config.get("hf_api_key") or os.getenv('HF_API_KEY'))
+        self.client = InferenceClient(api_key=config.get("hf_token") or os.getenv('HF_TOKEN'))
         self.model = config.get("client_hf_repo_id")
 
     def complete_messages(self, messages, max_tokens=DEFAULT_MAX_TOKENS, temperature=DEFAULT_TEMPERATURE, stream=False):
@@ -102,9 +102,11 @@ class OfflineModel(ClientModel):
     def __init__(self, config):
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        self.tokenizer = AutoTokenizer.from_pretrained(config.get("client_offline_model_path"))
+        self.tokenizer = AutoTokenizer.from_pretrained(config.get("client_offline_model_path"),
+                                                       token=config.get("hf_token") or os.getenv('HF_TOKEN'))
         self.model = AutoModelForCausalLM.from_pretrained(
             config.get("client_offline_model_path"),
+            token=config.get("hf_token") or os.getenv('HF_TOKEN'),
             device_map="auto",
             torch_dtype="float16"
         )

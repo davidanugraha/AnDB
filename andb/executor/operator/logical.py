@@ -120,37 +120,62 @@ class PromptColumn(AbstractColumn):
     def __eq__(self, other):
         if not isinstance(other, PromptColumn):
             return False
-        return f'{self.table_name}.{self.column_name}: {self.prompt_text}' == f'{other.table_name}.{other.column_name}: {other.prompt_text}'
+        return vars(self) == vars(other)
 
     def __hash__(self):
-        return hash((self.prompt_text))
+        return hash((self.table_name, self.prompt_text, self.column_name))
 
     def core(self):
         return PromptColumn(self.table_name, self.prompt_text, self.column_name)
     
-class SemanticSchemaColumn(AbstractColumn):
-    def __init__(self, prompt_text, column_name, column_type):
+class SemanticTransformColumn(AbstractColumn):
+    def __init__(self, table_name, original_columns, target_column, prompt_text, k):
         super().__init__()
+        self.table_name = table_name
+        self.original_columns = original_columns
+        self.column_name = target_column
         self.prompt_text = prompt_text
-        self.table_name = DummyTableName.TEMP_TABLE_NAME
-        self.column_name = column_name
-        self.column_type = column_type
+        self.k = k
         self.function_name = None
         self.alias = None
 
     def __repr__(self):
-        return f"SEMANTIC_SCHEMA_COLUMN: {self.column_name}"
+        return f'{self.column_name}'
 
     def __eq__(self, other):
-        if not isinstance(other, SemanticSchemaColumn):
+        if not isinstance(other, SemanticTransformColumn):
+            return False
+        return vars(self) == vars(other)
+
+    def __hash__(self):
+        return hash((self.table_name, self.original_columns, self.column_name,
+                     self.prompt_text, self.k))
+
+    def core(self):
+        return SemanticTransformColumn(self.table_name, self.original_columns, self.column_name,
+                                       self.prompt_text, self.k)
+        
+class VirtualColumn(AbstractColumn):
+    def __init__(self, column_name):
+        super().__init__()
+        self.table_name = DummyTableName.TEMP_TABLE_NAME
+        self.column_name = column_name
+        self.function_name = None
+        self.alias = None
+
+    def __repr__(self):
+        return f'{self.column_name}'
+
+    def __eq__(self, other):
+        if not isinstance(other, VirtualColumn):
             return False
         return str(self) == str(other)
 
     def __hash__(self):
-        return hash((self.prompt_text, self.column_name))
+        return hash(self.column_name)
 
     def core(self):
-        return SemanticSchemaColumn(self.prompt_text, self.column_name, self.column_type)
+        return VirtualColumn(self.column_name)
 
 class Condition(LogicalOperator):
     def __init__(self, operation, children=None):
@@ -238,6 +263,7 @@ class LogicalQuery(LogicalOperator):
         self.alias = {}
         self.limit = None
         self.distinct = False
+        self.unchecked_columns = []
 
         self._seen_table_columns = set()
 
@@ -267,12 +293,15 @@ class ProjectionOperator(LogicalOperator):
 
 
 class SemanticScanOperator(LogicalOperator):
-    def __init__(self, schema, children=None):
+    def __init__(self, prompt_columns, children=None):
         super().__init__('SemanticScan', children)
-        self.schema = schema
+        self.prompt_columns = prompt_columns
+        self.table_columns = []
+        for col in prompt_columns:
+            self.table_columns.append(TableColumn(col.table_name, col.column_name))
 
     def get_args(self):
-        return ('schema', self.schema),
+        return ('prompt columns', self.prompt_columns),
 
 
 class SemanticTransformOperator(LogicalOperator):
@@ -281,7 +310,7 @@ class SemanticTransformOperator(LogicalOperator):
         self.columns = columns
 
     def get_args(self):
-        return ('columns', self.columns),
+        return ('transform columns', self.columns),
 
 
 class SelectionOperator(LogicalOperator):

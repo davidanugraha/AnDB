@@ -17,7 +17,7 @@ class SessionParameter(local):
     embed_hf_repo_id = 'sentence-transformers/all-MiniLM-L6-v2'
     embed_offline_model_path = 'sentence-transformers/all-MiniLM-L6-v2'
     
-    hf_api_key = None
+    hf_token = None
     openai_api_key = None
 
 # TODO: refactor this class and fix the runtime error
