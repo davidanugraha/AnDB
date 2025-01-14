@@ -165,11 +165,11 @@ class JoinImplementation(BaseImplementation):
     @classmethod
     def on_implement(cls, join_operator: JoinOperator):
         # TODO: choose the best join type (e.g., HashJoin, SortMergeJoin)
-        left_node, right_node = join_operator.children[0], join_operator.children[1]
-        if left_node.table_oid == OID_SCANNING_FILE or right_node.table_oid == OID_SCANNING_FILE:
-            return semantic.SemanticJoin(join_type=join_operator.join_type,
-                                         target_columns=join_operator.table_columns,
-                                         join_filter=Filter(join_operator.join_condition))
+        if isinstance(join_operator.join_condition, SemanticCondition):
+            return semantic.SemanticJoin(
+                semantic_match=join_operator.join_condition,
+                intermediate_data="json",
+            )
         else:
             # that means the scan operator includes index scan
             return select.NestedLoopJoin(join_type=join_operator.join_type,
@@ -226,6 +226,7 @@ class QueryImplementation(BaseImplementation):
         if node is None:
             return None
 
+        #print(node.__dict__)
         if ScanImplementation.match(node):
             new_node = ScanImplementation.on_implement(node)
         elif JoinImplementation.match(node):
@@ -372,5 +373,6 @@ _all_implementations = [impl() for impl in BaseImplementation.__subclasses__()]
 def andb_logical_plan_implement(logical_plan):
     for impl in _all_implementations:
         if impl.match(logical_plan):
+            #print(type(logical_plan))
             return impl.on_implement(logical_plan)
     return logical_plan

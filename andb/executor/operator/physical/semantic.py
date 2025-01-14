@@ -569,6 +569,103 @@ class SemanticTransform(PhysicalOperator):
         self.stream = None
         self.children[0].close()
 
+class SemanticJoin(PhysicalOperator):
+    def __init__(self, semantic_match: SemanticPrompt, intermediate_data='json'):
+        """
+        Args:
+            schema: Schema of the table.
+            intermediate_data: Intermediate output (for debugging purposes between 'json' and 'tabular')
+        """
+        super().__init__('SemanticJoin')
+        #self._convert_semantic_prompt(schema)
+        self.prompt = semantic_match
+        self.client_model = default_client_model()
+        self.intermediate_data = intermediate_data
+        if self.intermediate_data not in ["json", "tabular"]:
+            raise NotImplementedError(f"Intermediate data `{self.intermediate_data}` is not implemented!")
+
+        #self.get_proj_index()
+
+    def get_proj_index(self):
+        #change col to include this
+        self.col_inds = {}
+
+        for col in self.prompt.table_columns.values():
+            i = 0
+            for child in self.children:
+                j = 0
+                for table_col in child.columns:
+                    #print(table_col.table_name + ", " + table_col.table_name)
+                    if table_col.table_name != col.table_name:
+                        break
+                    if table_col.column_name == col.column_name:
+                        self.col_inds[str(col)] = (i, j)
+                        j+=1
+                        break
+                    j += 1
+                i += 1
+
+    def open(self):
+        if len(self.children) <= 1:
+            raise ValueError("SemanticJoin requires more than one input operator")
+        #MAJOR: ADD check to see if columns exist in children if check does not exist already
+        for child in self.children:
+            child.open()
+        self.columns = self.children[0].columns + self.children[1].columns
+        self.get_proj_index()
+        super().open()
+
+    def convert_prompt_per_row(self, row1, row2):
+        prompt_str = self.prompt.expr + " where the values for "
+        cells = []
+        for col_name, col in self.prompt.table_columns.items():
+            ind = self.col_inds[col.table_name + "." + col.column_name]
+            prompt_str += col_name + ", "
+            curr_def = "{" + col_name + "}=\n"
+            if (ind[0] == 0):
+                curr_def += row1[ind[1]]
+            else:
+                curr_def += row2[ind[1]]
+            cells.append(curr_def)
+
+        prompt_str = prompt_str[:-2] + " are the following: " + "\n".join(cells)
+        return prompt_str
+
+    def next(self):
+        """
+        Process whole document with semantic prompts
+        Returns:
+            Dataframe
+        """
+        prompt_system = ("You will be given a list of prompts. For each prompt, if true, output 1, else 0. The output should only be a list of '0's and '1's, seperating by a space character. Do not give any other explanations or formatting."
+            "For example: If the result is 'true true false' for a sequence of 3 prompts, output '1 1 0'")
+        left_rows = []
+        right_rows = []
+        for left_row in self.children[0].next():
+            left_rows.append(left_row)
+            for right_row in self.children[1].next():
+                msg += self.convert_prompt_per_row(left_row, right_row)  
+                right_rows.append(right_row)
+
+        messages = [
+            {"role": "system", "content": prompt_system},
+            {"role": "user", "content": msg}
+        ]            
+        response = self.client_model.complete_messages(messages)
+        
+        i = 0
+        items = response.split(" ")
+        for left in left_rows:
+            for right in right_rows:
+                if "1" in items[i]:
+                    yield left + right
+                i += 1
+
+    def close(self):
+        """Clean up resources"""
+        for child in self.children:
+            child.close()
+        super().close()
 
 class SemanticScan(PhysicalOperator):
     """Physical operator for processing document into a proper table with prompts"""

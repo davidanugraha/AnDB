@@ -19,7 +19,7 @@ class Join(ASTNode):
         self.join_type = join_type
         self.condition = condition
         self.implicit = kwargs.get('implicit', False)
-
+        self.is_semantic = kwargs.get('is_semantic', False)
 
 class BinaryTreeNode:
     def __init__(self):

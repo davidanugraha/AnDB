@@ -109,8 +109,13 @@ class QueryLogicalPlanTransformation(BaseTransformation):
 
     @staticmethod
     def process_non_join_scan(query: LogicalQuery):
-        assert len(query.scan_operators) == 1  #TODO: support 0 in future
-        scan = query.scan_operators[0]
+        scan = None
+        if len(query.semantic_scan_operators) > 0:
+            assert len(query.semantic_scan_operators) == 1
+            scan = list(query.semantic_scan_operators.values())[0]
+        else:
+            assert len(query.scan_operators) == 1  #TODO: support 0 in future
+            scan = list(query.scan_operators.values())[0]
 
         if not query.condition:
             query.add_child(scan)
@@ -129,6 +134,10 @@ class QueryLogicalPlanTransformation(BaseTransformation):
 
     @staticmethod
     def process_join_scan(query: LogicalQuery):
+        if isinstance(query.join_operators[0].join_condition, SemanticCondition):
+            query.add_child(query.join_operators[0])
+            return
+
         condition_table_names = {}
         if query.condition:
             for condition in query.condition.get_iterator():
@@ -165,6 +174,8 @@ class QueryLogicalPlanTransformation(BaseTransformation):
                     join_table_columns.append(condition.right)
             #TODO: can be further pruned
             # join_operator.table_columns = None
+        
+        #This check should be done before...
         for join_table_column in join_table_columns:
             for scan_operator in query.scan_operators:
                 if scan_operator.table_name != join_table_column.table_name:
@@ -222,7 +233,7 @@ class QueryLogicalPlanTransformation(BaseTransformation):
         query.children = [operator]
 
     @staticmethod
-    def on_transform(query: LogicalQuery):
+    def on_transform(query: LogicalQuery, ):
         #TODO: extract all involved columns, then prune useless columns
         #TODO: rewrite
 
@@ -302,6 +313,10 @@ class SelectTransformation(BaseTransformation):
                     target_table_name = table_name
         return target_table_name
 
+    # @classmethod
+    # def transform_semantic_tabular():
+    #     SemanticScanOperator
+
     @classmethod
     def transform_from_clause(cls, ast_outer, query):
         dont_add_table_as_scan = []
@@ -352,7 +367,7 @@ class SelectTransformation(BaseTransformation):
                     prompt_columns=prompt_columns,
                     children=table_source_scan
                 )
-                query.scan_operators.append(semantic_op)
+                query.scan_operators[table_name] = semantic_op
             else:
                 raise NotImplementedError()
 
@@ -379,8 +394,9 @@ class SelectTransformation(BaseTransformation):
         for name_or_path in query.from_tables:
             # Don't add TempTable by SemanticTabular as ScanOperator
             if name_or_path not in dont_add_table_as_scan:
-                query.scan_operators.append(ScanOperator(name_or_path, table_oid=query.from_tables[name_or_path]))
+                query.scan_operators[name_or_path] = ScanOperator(name_or_path, table_oid=query.from_tables[name_or_path])
 
+    ##do we still have a target list for join -> what if it belongs to multiple tables?
     @classmethod
     def transform_target_list(cls, ast, query):
         for target in ast:
@@ -478,29 +494,31 @@ class SelectTransformation(BaseTransformation):
             # maybe it is a multi-way join
             if isinstance(ast.left, Join):
                 SelectTransformation.transform_join_clause(ast.left, query)
+            # right should always be a table for now
             if isinstance(ast.right, Join):
                 SelectTransformation.transform_join_clause(ast.right, query)
 
             join_clause = ast
             if not join_clause.implicit:
-                join_condition = ConditionTransformation.on_transform(Condition(join_clause.condition))
-                join_condition = cls._supplement_table_name(join_condition, query.table_attr_forms)
+                if hasattr(ast, "is_semantic"):
+                    join_condition = SemanticCondition(join_clause.condition)
+                else:
+                    join_condition = ConditionTransformation.on_transform(Condition(join_clause.condition))
+                    join_condition = cls._supplement_table_name(join_condition, query.table_attr_forms)
             else:
                 join_condition = None
 
             join_operator = JoinOperator(join_condition=join_condition,
-                                         join_type=join_clause.join_type)
-            left_table_name, right_table_name = join_clause.left.parts, join_clause.right.parts
-            left_scan_operator = right_scan_operator = None
-            for scan_operator in query.scan_operators:
-                # for self-joining, the left and right table reuse a same scan operator
-                if scan_operator.table_name == left_table_name:
-                    left_scan_operator = scan_operator
-                if scan_operator.table_name == right_table_name:
-                    right_scan_operator = scan_operator
-
-            join_operator.add_child(left_scan_operator)
-            join_operator.add_child(right_scan_operator)
+                                        join_type=join_clause.join_type)
+            
+            
+            if hasattr(ast, "is_semantic") == False:
+                left_table_name, right_table_name = join_clause.left.parts, join_clause.right.parts
+            else:
+                left_table_name, right_table_name = join_clause.left.identifier.parts, join_clause.right.identifier.parts
+            
+            join_operator.add_child(query.scan_operators[left_table_name])
+            join_operator.add_child(query.scan_operators[right_table_name])
 
             query.join_operators.append(join_operator)
 
