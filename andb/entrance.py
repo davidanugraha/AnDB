@@ -28,7 +28,6 @@ def execute_simple_query(query_string):
         for stage in list_stages:
             curr_ast = stage.get_ast()
             plan_tree = andb_query_plan(curr_ast)
-            #ini = input("Enter")
             portal = ExecutionPortal(query, get_ast_type(curr_ast), plan_tree)
             xid = DUMMY_XID  # for select
             if portal.cmd_type in (
