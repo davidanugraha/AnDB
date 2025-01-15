@@ -9,25 +9,25 @@ class FileSource(ASTNode):
         self.parts = file_path.value
 
 class SemanticMatch(ASTNode):
-    def convert_label(self, m):
-        label = m.group(1)
-        title, col = label.split(':')
-        title.strip()
-        col.strip()
-
-        if re.fullmatch("^[a-zA-Z]+$", title) == False:
-            raise Exception(f'{title}: Label must contain alphabetic letters only')
-        if re.fullmatch("^[a-zA-Z]+$", title) == False:
-            raise Exception(f'{col}: Column is invalid')
-
-        self.columns[title] = Identifier(col)
-        return '{' + title + '}'
-
     def __init__(self, prompt_text, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.columns = {}
-        #self.txt = prompt_text
-        self.prompt_text = re.sub('\{([^{}]*)\}', self.convert_label, prompt_text)
+        self.condition = None
+        self.identifiers = []
+        self._convert_prompt_to_conditions(prompt_text)
+    
+    def _convert_prompt_to_conditions(self, prompt_text):
+        def replace_placeholder(match):
+            placeholder = match.group(1).strip()
+
+            # Convert the placeholder into an Identifier object
+            identifier = Identifier(parts=placeholder)
+            self.identifiers.append(identifier)
+
+            # Replace with indexed reference
+            return f"'{{{len(self.identifiers) - 1}}}'"
+
+        # Detect and replace placeholders in the prompt text
+        self.condition = re.sub(r'\{([^{}]+)\}', replace_placeholder, prompt_text)
 
 class Prompt(ASTNode):
     def __init__(self, prompt_text, defined_column, *args, **kwargs):

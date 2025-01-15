@@ -62,18 +62,17 @@ def _create_join_stages(semantic_join:Join, list_stages:list):
 def andb_decompose_ast(original_ast):
     """Decompose the original AST into multiple stages.""" # TODO: Generalize
     list_stages = []
-
+    
+    curr_ast = original_ast
     if isinstance(original_ast, Explain):
         curr_ast = original_ast.target
-    else:
-        curr_ast = original_ast
 
     if hasattr(curr_ast, "from_table"):
         if isinstance(curr_ast.from_table, SemanticTabular):
             list_stages.append(_create_temp_table_stage(curr_ast.from_table))
         elif isinstance(curr_ast.from_table, Join):
             _create_join_stages(curr_ast.from_table, list_stages)
-
+        
     list_stages.append(_create_main_query_stage(original_ast))
         
     return list_stages
