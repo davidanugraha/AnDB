@@ -324,7 +324,7 @@ class SemanticJoinOperator(LogicalOperator):
     def get_args(self):
         return (('condition', self.condition),
                 ('join type', self.join_type),
-                ('children table names'), self.children_table_names)
+                ('children table names', self.children_table_names))
         
 class SemanticCondition(LogicalOperator):
     def __init__(self, condition, table_columns, children=None):

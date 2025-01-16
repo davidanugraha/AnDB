@@ -129,18 +129,17 @@ class QueryLogicalPlanTransformation(BaseTransformation):
 
     @staticmethod
     def process_join_scan(query: LogicalQuery):
-        # TODO: Support more join operators instead of just one
-        if isinstance(query.join_operators[0], SemanticJoinOperator):
-            query.add_child(query.join_operators[0])
-            return
-
         condition_table_names = {}
-        if query.condition:
+        if query.condition and not isinstance(query.condition, SemanticCondition):
             for condition in query.condition.get_iterator():
                 if isinstance(condition.left, TableColumn):
                     condition_table_names[condition.left.table_name] = condition
                 if isinstance(condition.right, TableColumn):
                     condition_table_names[condition.right.table_name] = condition
+        elif query.condition and isinstance(query.condition, SemanticCondition):
+            for table_col in query.condition.table_columns:
+                if table_col.table_name not in condition_table_names:
+                    condition_table_names[table_col.table_name] = query.condition
 
         scan_operator: "ScanOperator"
         for scan_operator in query.scan_operators:
@@ -157,19 +156,20 @@ class QueryLogicalPlanTransformation(BaseTransformation):
 
         # add table columns that come from join conditions
         join_table_columns = []
-        join_operator: "JoinOperator"
-        for join_operator in query.join_operators:
-            # skip cross join
-            if not join_operator.join_condition:
+        for join_operator in query.join_operators:   
+            if isinstance(join_operator, SemanticJoinOperator):
+                join_table_columns.extend(join_operator.condition.table_columns)
+            elif not join_operator.join_condition:
+                # skip cross join
                 continue
-
-            for condition in join_operator.join_condition.get_iterator():
-                if isinstance(condition.left, TableColumn):
-                    join_table_columns.append(condition.left)
-                if isinstance(condition.right, TableColumn):
-                    join_table_columns.append(condition.right)
-            #TODO: can be further pruned
-            # join_operator.table_columns = None
+            else:
+                for condition in join_operator.join_condition.get_iterator():
+                    if isinstance(condition.left, TableColumn):
+                        join_table_columns.append(condition.left)
+                    if isinstance(condition.right, TableColumn):
+                        join_table_columns.append(condition.right)
+                #TODO: can be further pruned
+                # join_operator.table_columns = None
         
         for join_table_column in join_table_columns:
             for scan_operator in query.scan_operators:

@@ -4,7 +4,6 @@ import re
 
 from andb.errno.errors import ExecutionStageError
 from andb.executor.operator.logical import Condition, DummyTableName, PromptColumn, TableColumn, SemanticTransformColumn, VirtualColumn
-from andb.catalog.syscache import CATALOG_ANDB_ATTRIBUTE
 from andb.executor.operator.physical.base import PhysicalOperator
 from andb.executor.operator.physical.select import Filter
 from andb.sql.parser.ast.join import JoinType
@@ -52,47 +51,6 @@ def _parse_json(output):
             return json.loads(cleaned_output)
         except json.JSONDecodeError as e:
             raise RuntimeError(f"Error cleaning JSON: {e}")
-
-def _parse_json_into_tuples(raw_output):
-    cleaned_json = _parse_json(raw_output)
-    if len(cleaned_json) == 0:
-        return []
-
-    # Extract column names (keys of the first dictionary)
-    columns = list(cleaned_json[0].keys())
-    table_tuples = [tuple(item.get(col, None) for col in columns) for item in cleaned_json]
-
-    return table_tuples
-
-def _parse_markdown_into_tuples(raw_markdown):
-    """
-    I think this should be deprecated since it reduces performance, although it saves number of output tokens
-    Parses a markdown-style table into a list of tuples.
-    The assumption is that `|` is used as the separator.
-    """
-    # Clean and split lines and combine into a CSV string
-    lines = raw_markdown.strip().split("\n")
-    cleaned_lines = [line.strip("|").strip() for line in lines]
-
-    # Convert each line into a list of cells
-    table_tuples = []
-    for line in cleaned_lines:
-        # Split on '|' and strip spaces
-        cells = [cell.strip() for cell in line.split("|")]
-
-        # Replace any cell with only dashes with None (to simulate NaN)
-        cells = [None if re.fullmatch(r"-+", cell) else cell for cell in cells]
-
-        # Append as a tuple
-        table_tuples.append(tuple(cells))
-
-    # Remove the separator row (if exists)
-    if len(table_tuples) > 1 and all(cell is None for cell in table_tuples[0]):
-        table_tuples.pop(0)
-    if len(table_tuples) > 1 and all(cell is None for cell in table_tuples[-1]):
-        table_tuples.pop()
-
-    return table_tuples
 
 class SemanticPrompt(PhysicalOperator):
     def __init__(self, prompt_text):
@@ -484,7 +442,6 @@ class SemanticJoin(PhysicalOperator):
         """
         Args:
             schema: Schema of the table.
-            intermediate_data: Intermediate output (for debugging purposes between 'json' and 'tabular')
         """
         super().__init__('SemanticJoin')
         self.columns = []
@@ -579,11 +536,10 @@ class SemanticJoin(PhysicalOperator):
 class SemanticScan(PhysicalOperator):
     """Physical operator for processing document into a proper table with prompts"""
 
-    def __init__(self, target_columns, prompt_columns, filter=None, intermediate_data="tabular"):
+    def __init__(self, target_columns, prompt_columns, filter=None):
         """
         Args:
             schema: Schema of the table.
-            intermediate_data: Intermediate output (for debugging purposes between 'json' and 'tabular')
         """
         super().__init__('SemanticScan')
         self.columns = target_columns
@@ -591,10 +547,6 @@ class SemanticScan(PhysicalOperator):
         self.has_init_models = False
         self.client_model = None
         self._filter = filter
-        self.intermediate_data = intermediate_data
-        if self.intermediate_data not in ["json", "tabular"]:
-            raise NotImplementedError(f"Intermediate data `{self.intermediate_data}` is not implemented!")
-
         self.document = None
         self.embeddings = None
         self.stream = None
@@ -609,12 +561,9 @@ class SemanticScan(PhysicalOperator):
             if isinstance(self._filter, Filter):
                 columns = []
                 type_oids = []
-                attr_form_array = CATALOG_ANDB_ATTRIBUTE.get_table_forms(self.base_table_oid)
-                for attr_form in attr_form_array:
-                    table_column = TableColumn(self.base_table_relation.name, attr_form.name)
+                for table_column in self.columns:
                     columns.append(table_column)
-                    type_oids.append(attr_form.type_oid)
-                self._filter.set_tuple_columns(columns, type_oids=type_oids)
+                self._filter.set_tuple_columns(columns, type_oids=None)
             elif isinstance(self._filter, SemanticFilter):
                 self._filter.set_proj_index(self.columns)
         super().open()
@@ -625,10 +574,20 @@ class SemanticScan(PhysicalOperator):
         
         for column in prompt_columns:
             if isinstance(column, PromptColumn):
-                schema_lines.append(f"{column.column_name}: Extract '{column.prompt_text}'")
+                schema_lines.append(f"{column.column_name}: Extract '{column.prompt_text.value}'")
 
         # Combine into a formatted schema
         self.schema = "\n".join(schema_lines)
+        
+    def _parse_json_into_tuples(self, raw_output):
+        cleaned_json = _parse_json(raw_output)
+        if len(cleaned_json) == 0:
+            return []
+
+        # Extract column names (keys of the first dictionary)
+        table_tuples = [tuple(item.get(col.column_name, None) for col in self.columns) for item in cleaned_json]
+
+        return table_tuples
 
     def next(self):
         """
@@ -647,50 +606,28 @@ class SemanticScan(PhysicalOperator):
                 self.document += doc  # Assume child is Scan; only take the document, not embedding
                 self.document += "\n"
                 
-            if self.intermediate_data == 'json':
-                prompt_system = """
-                You are a data extraction assistant.
-                Your task is to extract structured information from unstructured text and format it into JSON.
-                Follow the provided schema exactly.
-                """
 
-                messages = [
-                    {"role": "system", "content": prompt_system},
-                    {"role": "user", "content": f"""
-                    Convert the following raw text into a JSON array using this schema:
-                    {self.schema}
-                    
-                    Ensure the response starts with '[' and ends with ']', with no additional text or explanation.
-                    Missing or empty values should be represented as null. 
-                    
-                    Raw text:
-                    {self.document}
-                    """}
-                ]
-                response = self.client_model.complete_messages(messages, temperature=temperature)
-                self.result_tuples = _parse_json_into_tuples(response)
+            prompt_system = """
+            You are a data extraction assistant.
+            Your task is to extract structured information from unstructured text and format it into JSON.
+            Follow the provided schema exactly.
+            """
 
-            else:
-                prompt_system = """
-                You are a data extraction assistant.
-                Your task is to extract structured information from unstructured text and format it into a row-based tabular format.
-                Follow the provided schema exactly and ensure the output adheres to the specified structure.
-                """
-
-                messages = [
-                    {"role": "system", "content": prompt_system},
-                    {"role": "user", "content": f"""
-                    Convert the following raw text into a row-based tabular format with `|` as the delimitter, and use this schema:
-                    {self.schema}
-                    
-                    Do not include any additional text or explanation outside the table.
-                    
-                    Raw text:
-                    {self.document}
-                    """}
-                ]
-                response = self.client_model.complete_messages(messages, temperature=temperature)
-                self.result_tuples = _parse_markdown_into_tuples(response)
+            messages = [
+                {"role": "system", "content": prompt_system},
+                {"role": "user", "content": f"""
+                Convert the following raw text into a JSON array using this schema:
+                {self.schema}
+                
+                Ensure the response starts with '[' and ends with ']', with no additional text or explanation.
+                Missing or empty values should be represented as null. 
+                
+                Raw text:
+                {self.document}
+                """}
+            ]
+            response = self.client_model.complete_messages(messages, temperature=temperature)
+            self.result_tuples = self._parse_json_into_tuples(response)
                 
         if self._filter:
             for filtered_tup in self._filter.filter(iter(self.result_tuples)):

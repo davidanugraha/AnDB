@@ -353,8 +353,7 @@ class SemanticScanImplementation(BaseImplementation):
         return semantic.SemanticScan(
             target_columns=old_operator.table_columns,
             prompt_columns=old_operator.prompt_columns,
-            filter=filter,
-            intermediate_data="json",
+            filter=filter
         )
 
 class SemanticTransformImplementation(BaseImplementation):
