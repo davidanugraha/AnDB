@@ -14,8 +14,7 @@ from andb.entrance import execute_simple_query
     
 TEST_DATA_DIRECTORY = os.path.join(os.path.realpath(os.path.dirname(__file__)), 
                                   'test_data')
-TEST_DATASET_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-NIPS_FILE_TEST = os.path.join(TEST_DATASET_DIR, "dataset/nips_2024_small.txt")
+TEST_DATASET_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'dataset')
 
 def setup(sql_file_setup_path=None):
     if os.path.exists(TEST_DATA_DIRECTORY):
@@ -27,11 +26,11 @@ def setup(sql_file_setup_path=None):
     dest_dir = os.path.join(TEST_DATA_DIRECTORY, f'base/{session_vars.SessionVars.database_oid}/files')
     os.makedirs(dest_dir, exist_ok=True)
     
-    shutil.copy(NIPS_FILE_TEST, dest_dir)
+    shutil.copytree(TEST_DATASET_DIR, dest_dir, dirs_exist_ok=True)
     
     # Read and execute SQL queries from the provided SQL file
     if sql_file_setup_path:
-        if os.path.exists(sql_file_setup_path):
+        if not os.path.exists(sql_file_setup_path):
             raise FileNotFoundError(f"SQL setup file not found: {sql_file_setup_path}")
             
         with open(sql_file_setup_path, "r") as sql_file:
