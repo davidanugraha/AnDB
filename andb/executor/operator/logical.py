@@ -293,9 +293,11 @@ class ProjectionOperator(LogicalOperator):
 
 
 class SemanticScanOperator(LogicalOperator):
-    def __init__(self, prompt_columns, children=None):
+    def __init__(self, table_name, prompt_columns, condition, children=None):
         super().__init__('SemanticScan', children)
+        self.table_name = table_name
         self.prompt_columns = prompt_columns
+        self.condition = condition
         self.table_columns = []
         for col in prompt_columns:
             self.table_columns.append(TableColumn(col.table_name, col.column_name))
@@ -311,6 +313,28 @@ class SemanticTransformOperator(LogicalOperator):
 
     def get_args(self):
         return ('transform columns', self.columns),
+        
+class SemanticJoinOperator(LogicalOperator):
+    def __init__(self, condition, join_type, children_table_names, children=None):
+        super().__init__('SemanticJoin', children)
+        self.condition = condition
+        self.join_type = join_type
+        self.children_table_names = children_table_names
+
+    def get_args(self):
+        return (('condition', self.condition),
+                ('join type', self.join_type),
+                ('children table names', self.children_table_names))
+        
+class SemanticCondition(LogicalOperator):
+    def __init__(self, condition, table_columns, children=None):
+        super().__init__('SemanticCondition', children)
+        self.condition = condition
+        self.table_columns = table_columns
+
+    def get_args(self):
+        return (('condition', self.condition),
+                ('table columns', self.table_columns))
 
 
 class SelectionOperator(LogicalOperator):
@@ -323,7 +347,7 @@ class SelectionOperator(LogicalOperator):
 
 
 class JoinOperator(LogicalOperator):
-    def __init__(self, join_condition: Condition, join_type, table_columns=None, children=None):
+    def __init__(self, join_condition, join_type, table_columns=None, children=None):
         super().__init__('Join', children)
         self.join_condition = join_condition
         self.join_type = join_type

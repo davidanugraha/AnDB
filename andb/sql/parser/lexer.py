@@ -54,6 +54,7 @@ class SQLLexer(sly.Lexer):
         FILE,
         TABULAR,
         SEM_GROUP,
+        SEM_MATCH
     }
 
     CREATE = 'CREATE'
@@ -108,6 +109,7 @@ class SQLLexer(sly.Lexer):
     FILE = 'FILE'
     TABULAR = 'TABULAR'
     SEM_GROUP = 'SEM_GROUP'
+    SEM_MATCH = 'SEM_MATCH'
 
     DOT = r'\.'
     COMMA = r','

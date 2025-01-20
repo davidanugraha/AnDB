@@ -18,7 +18,7 @@ from .ast.misc import Constant, Star, Tuple
 from .exception import ParsingException
 from .ast.drop import DropTable, DropIndex
 from .ast.utility import Command
-from .ast.semantic import FileSource, Prompt, SemanticTabular, SemanticGroup
+from .ast.semantic import FileSource, Prompt, SemanticTabular, SemanticGroup, SemanticMatch
 
 
 def check_select_keywords(select, operation):
@@ -201,7 +201,7 @@ class SQLParser(sly.Parser):
         select = p.select
         check_select_keywords(select, 'WHERE')
         where_expr = p.expr
-        if not isinstance(where_expr, (Operation, Prompt)):
+        if not isinstance(where_expr, (Operation, Prompt, SemanticMatch)):
             raise ParsingException(
                 f"Require an operation for WHERE clause.")
         select.where = where_expr
@@ -220,22 +220,28 @@ class SQLParser(sly.Parser):
     # TODO: subquery, CTE
     # join
     @_('from_table_aliased join_clause from_table_aliased',
-       'join_tables join_clause from_table_aliased')
+       'join_tables join_clause from_table_aliased',
+       'from_tabular join_clause from_tabular',
+       'join_tables join_clause from_tabular')
     def join_tables(self, p):
         return Join(left=p[0],
                     right=p[2],
                     join_type=p.join_clause)
 
     @_('from_table_aliased join_clause from_table_aliased ON expr',
-       'join_tables join_clause from_table_aliased ON expr')
+       'join_tables join_clause from_table_aliased ON expr',
+       'from_tabular join_clause from_tabular ON expr',
+       'join_tables join_clause from_tabular ON expr')
     def join_tables(self, p):
         return Join(left=p[0],
                     right=p[2],
                     join_type=p.join_clause,
                     condition=p.expr)
-
+    
     @_('from_table_aliased COMMA from_table_aliased',
-       'join_tables_implicit COMMA from_table_aliased')
+       'join_tables_implicit COMMA from_table_aliased',
+       'from_tabular COMMA from_tabular',
+       'join_tables_implicit COMMA from_tabular')
     def join_tables_implicit(self, p):
         return Join(left=p[0],
                     right=p[2],
@@ -661,3 +667,7 @@ class SQLParser(sly.Parser):
     def expr(self, p):
         alias = getattr(p, 'identifier1', None)
         return SemanticGroup(identifier=p.identifier0, prompt=p.expr, k=p.integer, alias=alias)
+    
+    @_('SEM_MATCH LPAREN string RPAREN')
+    def expr(self, p):
+        return SemanticMatch(p.string)

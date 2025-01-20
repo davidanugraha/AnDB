@@ -8,14 +8,14 @@ class SessionParameter(local):
     # Client model related parameters
     client_llm = 'openai'
     client_openai_model = 'gpt-4o-mini'
-    client_hf_repo_id = 'meta-llama/Meta-Llama-3-8B-Instruct'
-    client_offline_model_path = 'meta-llama/Meta-Llama-3-8B-Instruct'
+    client_hf_repo_id = 'meta-llama/Llama-3.1-8B-Instruct'
+    client_offline_model_path = 'meta-llama/Llama-3.1-8B-Instruct'
     
     # Embedding model related parameters
     embed_llm = 'openai'
     embed_openai_model = 'text-embedding-3-large'
-    embed_hf_repo_id = 'sentence-transformers/all-MiniLM-L6-v2'
-    embed_offline_model_path = 'sentence-transformers/all-MiniLM-L6-v2'
+    embed_hf_repo_id = 'intfloat/multilingual-e5-large-instruct'
+    embed_offline_model_path = 'intfloat/multilingual-e5-large-instruct'
     
     hf_token = None
     openai_api_key = None

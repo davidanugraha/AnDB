@@ -52,47 +52,6 @@ def _parse_json(output):
         except json.JSONDecodeError as e:
             raise RuntimeError(f"Error cleaning JSON: {e}")
 
-def _parse_json_into_tuples(raw_output):
-    cleaned_json = _parse_json(raw_output)
-    if len(cleaned_json) == 0:
-        return []
-
-    # Extract column names (keys of the first dictionary)
-    columns = list(cleaned_json[0].keys())
-    table_tuples = [tuple(item.get(col, None) for col in columns) for item in cleaned_json]
-
-    return table_tuples
-
-def _parse_markdown_into_tuples(raw_markdown):
-    """
-    I think this should be deprecated since it reduces performance, although it saves number of output tokens
-    Parses a markdown-style table into a list of tuples.
-    The assumption is that `|` is used as the separator.
-    """
-    # Clean and split lines and combine into a CSV string
-    lines = raw_markdown.strip().split("\n")
-    cleaned_lines = [line.strip("|").strip() for line in lines]
-
-    # Convert each line into a list of cells
-    table_tuples = []
-    for line in cleaned_lines:
-        # Split on '|' and strip spaces
-        cells = [cell.strip() for cell in line.split("|")]
-
-        # Replace any cell with only dashes with None (to simulate NaN)
-        cells = [None if re.fullmatch(r"-+", cell) else cell for cell in cells]
-
-        # Append as a tuple
-        table_tuples.append(tuple(cells))
-
-    # Remove the separator row (if exists)
-    if len(table_tuples) > 1 and all(cell is None for cell in table_tuples[0]):
-        table_tuples.pop(0)
-    if len(table_tuples) > 1 and all(cell is None for cell in table_tuples[-1]):
-        table_tuples.pop()
-
-    return table_tuples
-
 class SemanticPrompt(PhysicalOperator):
     def __init__(self, prompt_text):
         super().__init__('SemanticPrompt')
@@ -149,160 +108,69 @@ class SemanticFilter(PhysicalOperator):
         super().__init__('SemanticFilter')
         self.has_init_models = False
         self.client_model = None
-        if isinstance(condition, Condition):
-            self.condition_prompt = f'we only consider the following condition: {str(condition)}'
-        elif isinstance(condition, str):
-            self.condition_prompt = f'we only consider the following condition: {condition}'
-        else:
-            raise ValueError("Condition must be a Condition object or a string")
+        self.condition = condition.condition
+        self.filter_table_columns = condition.table_columns
+        self.child_columns = []
+        self.tab_col_inds = []
+        
+    def set_proj_index(self, columns):
+        # Iterate over which column index to be used; for now assume only left and right
+        for filter_col in self.filter_table_columns:
+            match_found = False
+            for col_index, col in enumerate(columns):
+                if filter_col == col: # Compare TableColumn with TableColumn
+                    self.tab_col_inds.append(col_index)
+                    match_found = True
+                    break
+
+            if match_found:
+                break
+            
+            # If no match was found for some reason
+            if not match_found:
+                raise ValueError(f"Column '{filter_col.column_name}' not found.")
 
     def open(self):
-        return super().open()
+        if len(self.children) != 1:
+            raise ValueError("SemanticFilter currently only supports one input operator")
 
+        self.children[0].open()
+        self.columns = self.children[0].columns
+        self.set_proj_index(self.columns)
+        super().open()
+        
     def close(self):
+        for child in self.children:
+            child.close()
         return super().close()
+        
+    def _construct_prompt_condition(self, row):
+        # Condition is already a string that just needs to be formatted
+        entry_vals = []
+        for col_ind in self.tab_col_inds:
+            entry_vals.append(row[col_ind])
+                
+        return self.condition.format(*tuple(entry_vals))
 
-    def judge(self, tuple):
-        # Convert tuple to text format for analysis
-        text = str(tuple[0]) if len(tuple) == 1 else " ".join(str(x) for x in tuple)
-
-        try:
-            # Create a prompt that combines the condition and the tuple text
-            prompt = f"""
-            Condition: {self.condition_prompt}
-            Text to evaluate: {text}
-            
-            Does the text satisfy the condition? Please respond with only 'true' or 'false'.
-            """
-
-            # Call OpenAI API
-            messages = [
-                {"role": "system", "content": "You are a precise evaluator that only responds with 'true' or 'false'."},
-                {"role": "user", "content": prompt}
-            ]
-
-            response = self.client_model.complete_messages(messages=messages, temperature=0.1)
-
-            # Get the response and convert to boolean
-            result = response.strip().lower()
-            return result == 'true'
-
-        except Exception as e:
-            logging.error(f"Error in semantic filtering: {e}")
-            raise e
-
-    def next(self):
+    def filter(self, iterator):
         if not self.has_init_models:
             self.has_init_models = True
             self.client_model = default_client_model()
         
-        for tuple in self.children[0].next():
-            if self.judge(tuple):
+        for tuple in iterator:
+            temperature = 0.1
+            msg = self._construct_prompt_condition(tuple)
+            messages = [
+                {"role": "system", "content": "You are a strict judge that outputs only 'true' or 'false' with no punctuation or extra characters based on a given statement."},
+                {"role": "user", "content": msg}
+            ]            
+            response = self.client_model.complete_messages(messages, temperature=temperature)
+            if response.lower() == "true":
                 yield tuple
 
-
-class SemanticJoin(PhysicalOperator):
-    """
-    Semantic Join operator that uses OpenAI API to join documents based on their semantic meaning
-    """
-
-    def __init__(self, join_type, target_columns=None, join_filter: Filter = None):
-        super().__init__('SemanticJoin')
-        self.has_init_models = False
-        self.client_model = None
-        self.join_type = join_type
-        self.target_columns = target_columns
-        self.join_filter = join_filter
-        self.join_prompt = ''
-
-        if self.join_type == JoinType.INNER_JOIN:
-            self.join_prompt += "Only return the relationship if the two texts are semantically related."
-        elif self.join_type == JoinType.LEFT_JOIN:
-            self.join_prompt += "Only return the relationship if the 'Text 1' is semantically related to the Text 2."
-        elif self.join_type == JoinType.RIGHT_JOIN:
-            self.join_prompt += "Only return the relationship if the 'Text 2' is semantically related to the Text 1."
-        elif self.join_type == JoinType.FULL_JOIN:
-            self.join_prompt += "Return the relationship if the two texts are semantically related."
-
-    def open(self):
-        """
-        Initialize the operator and validate children
-        """
-        # Validate we have exactly 2 children (left and right input)
-        if len(self.children) != 2:
-            raise ValueError("SemanticJoin requires exactly two input operators")
-
-        # Open both child operators
-        self.children[0].open()
-        self.children[1].open()
-
-        # Set output columns
-        self.columns = (
-                self.children[0].columns +  # Left input columns
-                self.children[1].columns +  # Right input columns
-                [TableColumn(DummyTableName.TEMP_TABLE_NAME, 'relationship')]  # Add relationship column
-        )
-
     def next(self):
-        """
-        Generate joined results by semantically comparing documents
-        """
-        if not self.has_init_models:
-            self.has_init_models = True
-            self.client_model = default_client_model()
-        
-        # Get all texts from left child
-        for left_tuple in self.children[0].next():
-            left_text = left_tuple[0]  # Assuming text content is first column
-
-            # Get all texts from right child
-            for right_tuple in self.children[1].next():
-                right_text = right_tuple[0]  # Assuming text content is first column
-
-                # Get semantic relationship using OpenAI
-                relationship = self._get_semantic_relationship(left_text, right_text)
-
-                # Yield combined tuple with relationship
-                yield left_tuple + right_tuple + (relationship,)
-
-    def _get_semantic_relationship(self, text1, text2):
-        """
-        Use OpenAI API to analyze relationship between two texts
-        """
-        try:
-            # Create prompt combining both texts
-            prompt = f"""
-            Text 1: {text1}
-            
-            Text 2: {text2}
-            
-            {self.join_prompt}
-            """
-
-            messages = [
-                {"role": "system",
-                 "content": "You are a text analysis expert focused on finding relationships between documents."},
-                {"role": "user", "content": prompt}
-            ]
-
-            # Call OpenAI API
-            # Lower temperature for more focused responses and limit response length
-            response = self.client_model.complete_messages(messages=messages, temperature=0.3, max_tokens=200)
-
-            # Extract and return the relationship description
-            return response.strip()
-
-        except Exception as e:
-            raise ExecutionStageError(f"Error in semantic analysis: {e}")
-
-    def close(self):
-        """
-        Clean up resources
-        """
-        self.children[0].close()
-        self.children[1].close()
-        super().close()
-
+        for filtered_tuple in self.filter(self.children[0].next()):
+            yield filtered_tuple
 
 class SemanticTransform(PhysicalOperator):
     """Physical operator for processing semantic target list with prompts"""
@@ -569,25 +437,116 @@ class SemanticTransform(PhysicalOperator):
         self.stream = None
         self.children[0].close()
 
+class SemanticJoin(PhysicalOperator):
+    def __init__(self, condition, join_type, children_table_names):
+        """
+        Args:
+            schema: Schema of the table.
+        """
+        super().__init__('SemanticJoin')
+        self.columns = []
+        self.children_columns = []
+        self.condition = condition.condition
+        self.join_table_columns = condition.table_columns
+        self.join_type = join_type
+        self.children_table_names = children_table_names
+        self.has_init_models = False
+        self.client_model = None
+        self.embedding_model = None
+        self.tab_col_inds = [] # Format: (tuple of (child_index, column_index))
+
+    def _get_proj_index(self):
+        # Iterate over which children and which column index to be joined with; for now assume only left and right
+        for join_col in self.join_table_columns:
+            match_found = False
+            for child_index, child_table_name in enumerate(self.children_table_names):
+                if join_col.table_name == child_table_name:
+                    for col_index, col in enumerate(self.children_columns[child_index]):
+                        if join_col == col: # Compare TableColumn with TableColumn
+                            self.tab_col_inds.append((child_index, col_index))
+                            match_found = True
+                            break
+
+                    if match_found:
+                        break
+            
+            # If no match was found for some reason
+            if not match_found:
+                raise ValueError(f"Column '{join_col.column_name}' not found in table '{join_col.table_name}'.")
+
+    def open(self):
+        if len(self.children) <= 1:
+            raise ValueError("SemanticJoin requires more than one input operator")
+
+        for child in self.children:
+            child.open()
+            self.columns.extend(child.columns)
+            self.children_columns.append(child.columns)
+        self._get_proj_index()
+        super().open()
+        
+    def _construct_prompt_condition(self, left_row, right_row):
+        # Condition is already a string that just needs to be formatted
+        entry_vals = []
+        for child_ind, col_ind in self.tab_col_inds:
+            if child_ind == 0:
+                entry_vals.append(left_row[col_ind])
+            else:
+                entry_vals.append(right_row[col_ind])
+                
+        return self.condition.format(*tuple(entry_vals))
+
+    def next(self):
+        """
+        Process whole document with semantic prompts
+        Returns:
+            Dataframe
+        """
+        temperature = 0.1
+        if not self.has_init_models:
+            self.has_init_models = True
+            self.client_model = default_client_model()
+            self.embedding_model = default_embedding_model()
+        
+        cached_right_rows = []
+
+        # TODO: Smarter batch inference call
+        for left_row in self.children[0].next():
+            if len(cached_right_rows) == 0:
+                # Materialize right row
+                for right_row in self.children[1].next():
+                    cached_right_rows.append(right_row)
+            
+            for right_row in cached_right_rows:
+                msg = self._construct_prompt_condition(left_row, right_row)
+                messages = [
+                    {"role": "system", "content": "You are a strict judge that outputs only 'true' or 'false' with no punctuation or extra characters based on a given statement."},
+                    {"role": "user", "content": msg}
+                ]            
+                response = self.client_model.complete_messages(messages, temperature=temperature)
+                if response.lower() == "true":
+                    yield left_row + right_row
+
+    def close(self):
+        """Clean up resources"""
+        for child in self.children:
+            child.close()
+        super().close()
 
 class SemanticScan(PhysicalOperator):
     """Physical operator for processing document into a proper table with prompts"""
 
-    def __init__(self, target_columns, prompt_columns, intermediate_data="tabular"):
+    def __init__(self, target_columns, prompt_columns, filter=None):
         """
         Args:
             schema: Schema of the table.
-            intermediate_data: Intermediate output (for debugging purposes between 'json' and 'tabular')
         """
         super().__init__('SemanticScan')
         self.columns = target_columns
         self._convert_prompt_columns_to_schema(prompt_columns)
         self.has_init_models = False
         self.client_model = None
-        self.intermediate_data = intermediate_data
-        if self.intermediate_data not in ["json", "tabular"]:
-            raise NotImplementedError(f"Intermediate data `{self.intermediate_data}` is not implemented!")
-
+        self._filter = filter
         self.document = None
         self.embeddings = None
         self.stream = None
@@ -597,6 +556,16 @@ class SemanticScan(PhysicalOperator):
         if len(self.children) != 1:
             raise ValueError("SemanticScan requires exactly one input operator")
         self.children[0].open()
+        
+        if self._filter:
+            if isinstance(self._filter, Filter):
+                columns = []
+                type_oids = []
+                for table_column in self.columns:
+                    columns.append(table_column)
+                self._filter.set_tuple_columns(columns, type_oids=None)
+            elif isinstance(self._filter, SemanticFilter):
+                self._filter.set_proj_index(self.columns)
         super().open()
         
     def _convert_prompt_columns_to_schema(self, prompt_columns):
@@ -605,10 +574,20 @@ class SemanticScan(PhysicalOperator):
         
         for column in prompt_columns:
             if isinstance(column, PromptColumn):
-                schema_lines.append(f"{column.column_name}: Extract '{column.prompt_text}'")
+                schema_lines.append(f"{column.column_name}: Extract '{column.prompt_text.value}'")
 
         # Combine into a formatted schema
         self.schema = "\n".join(schema_lines)
+        
+    def _parse_json_into_tuples(self, raw_output):
+        cleaned_json = _parse_json(raw_output)
+        if len(cleaned_json) == 0:
+            return []
+
+        # Extract column names (keys of the first dictionary)
+        table_tuples = [tuple(item.get(col.column_name, None) for col in self.columns) for item in cleaned_json]
+
+        return table_tuples
 
     def next(self):
         """
@@ -627,53 +606,35 @@ class SemanticScan(PhysicalOperator):
                 self.document += doc  # Assume child is Scan; only take the document, not embedding
                 self.document += "\n"
                 
-            if self.intermediate_data == 'json':
-                prompt_system = """
-                You are a data extraction assistant.
-                Your task is to extract structured information from unstructured text and format it into JSON.
-                Follow the provided schema exactly.
-                """
 
-                messages = [
-                    {"role": "system", "content": prompt_system},
-                    {"role": "user", "content": f"""
-                    Convert the following raw text into a JSON array using this schema:
-                    {self.schema}
-                    
-                    Ensure the response starts with '[' and ends with ']', with no additional text or explanation.
-                    Missing or empty values should be represented as null. 
-                    
-                    Raw text:
-                    {self.document}
-                    """}
-                ]
-                response = self.client_model.complete_messages(messages, temperature=temperature)
-                self.result_tuples = _parse_json_into_tuples(response)
+            prompt_system = """
+            You are a data extraction assistant.
+            Your task is to extract structured information from unstructured text and format it into JSON.
+            Follow the provided schema exactly.
+            """
 
-            else:
-                prompt_system = """
-                You are a data extraction assistant.
-                Your task is to extract structured information from unstructured text and format it into a row-based tabular format.
-                Follow the provided schema exactly and ensure the output adheres to the specified structure.
-                """
-
-                messages = [
-                    {"role": "system", "content": prompt_system},
-                    {"role": "user", "content": f"""
-                    Convert the following raw text into a row-based tabular format with `|` as the delimitter, and use this schema:
-                    {self.schema}
-                    
-                    Do not include any additional text or explanation outside the table.
-                    
-                    Raw text:
-                    {self.document}
-                    """}
-                ]
-                response = self.client_model.complete_messages(messages, temperature=temperature)
-                self.result_tuples = _parse_markdown_into_tuples(response)
-
-        for tup in self.result_tuples:
-            yield tup
+            messages = [
+                {"role": "system", "content": prompt_system},
+                {"role": "user", "content": f"""
+                Convert the following raw text into a JSON array using this schema:
+                {self.schema}
+                
+                Ensure the response starts with '[' and ends with ']', with no additional text or explanation.
+                Missing or empty values should be represented as null. 
+                
+                Raw text:
+                {self.document}
+                """}
+            ]
+            response = self.client_model.complete_messages(messages, temperature=temperature)
+            self.result_tuples = self._parse_json_into_tuples(response)
+                
+        if self._filter:
+            for filtered_tup in self._filter.filter(iter(self.result_tuples)):
+                yield filtered_tup
+        else:
+            for tup in self.result_tuples:
+                yield tup
 
     def close(self):
         """Clean up resources"""

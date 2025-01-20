@@ -3,6 +3,7 @@ from andb.catalog.syscache import CATALOG_ANDB_CLASS, CATALOG_ANDB_INDEX, CATALO
 from andb.errno.errors import InitializationStageError
 from andb.executor.operator.physical import select, insert, delete, semantic, update, utility
 from andb.executor.operator.physical.select import FileScan, TableScan, IndexScan, CoveredIndexScan, Filter
+from andb.executor.operator.physical.semantic import SemanticFilter
 from andb.runtime import session_vars
 from andb.sql.parser.ast.join import JoinType
 from andb.storage.engines.heap.relation import RelationKinds
@@ -165,16 +166,10 @@ class JoinImplementation(BaseImplementation):
     @classmethod
     def on_implement(cls, join_operator: JoinOperator):
         # TODO: choose the best join type (e.g., HashJoin, SortMergeJoin)
-        left_node, right_node = join_operator.children[0], join_operator.children[1]
-        if left_node.table_oid == OID_SCANNING_FILE or right_node.table_oid == OID_SCANNING_FILE:
-            return semantic.SemanticJoin(join_type=join_operator.join_type,
-                                         target_columns=join_operator.table_columns,
-                                         join_filter=Filter(join_operator.join_condition))
-        else:
-            # that means the scan operator includes index scan
-            return select.NestedLoopJoin(join_type=join_operator.join_type,
-                                         target_columns=join_operator.table_columns,
-                                         join_filter=Filter(join_operator.join_condition))
+        # that means the scan operator includes index scan
+        return select.NestedLoopJoin(join_type=join_operator.join_type,
+                                        target_columns=join_operator.table_columns,
+                                        join_filter=Filter(join_operator.join_condition))
 
 
 class SortImplementation(BaseImplementation):
@@ -238,6 +233,8 @@ class QueryImplementation(BaseImplementation):
             new_node = SemanticScanImplementation.on_implement(node)
         elif SemanticTransformImplementation.match(node):
             new_node = SemanticTransformImplementation.on_implement(node)
+        elif SemanticJoinImplementation.match(node):
+            new_node = SemanticJoinImplementation.on_implement(node)
         else:
             raise NotImplementedError(f'unknown operator {node.name}')
 
@@ -346,10 +343,17 @@ class SemanticScanImplementation(BaseImplementation):
 
     @classmethod
     def on_implement(cls, old_operator: SemanticScanOperator):
+        filter = None
+        if old_operator.condition is not None:
+            if isinstance(old_operator.condition, SemanticCondition):
+                filter = SemanticFilter(old_operator.condition)
+            else:
+                filter = Filter(old_operator.condition)
+        
         return semantic.SemanticScan(
             target_columns=old_operator.table_columns,
             prompt_columns=old_operator.prompt_columns,
-            intermediate_data="json",
+            filter=filter
         )
 
 class SemanticTransformImplementation(BaseImplementation):
@@ -364,6 +368,20 @@ class SemanticTransformImplementation(BaseImplementation):
             # Pass through the original columns
             target_columns=old_operator.columns,
             # Pass through any filter conditions
+        )
+        
+class SemanticJoinImplementation(BaseImplementation):
+    @classmethod
+    def match(cls, operator) -> bool:
+        # Check if any target in the target list is a PromptColumn
+        return isinstance(operator, SemanticJoinOperator)
+
+    @classmethod
+    def on_implement(cls, old_operator):
+        return semantic.SemanticJoin(
+            condition=old_operator.condition,
+            join_type=old_operator.join_type,
+            children_table_names=old_operator.children_table_names
         )
 
 _all_implementations = [impl() for impl in BaseImplementation.__subclasses__()]

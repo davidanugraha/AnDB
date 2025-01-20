@@ -14,7 +14,7 @@ from andb.sql.parser.ast.join import Join
 from andb.sql.parser.ast.misc import Star
 from andb.sql.parser.ast.operation import Function
 from andb.sql.parser.ast.select import Select
-from andb.sql.parser.ast.semantic import Prompt, FileSource, SemanticTabular, SemanticGroup
+from andb.sql.parser.ast.semantic import Prompt, FileSource, SemanticTabular, SemanticGroup, SemanticMatch
 from andb.sql.parser.ast.update import Update
 from andb.storage.engines.heap.relation import RelationKinds
 from andb.sql.parser.ast.utility import Command
@@ -130,12 +130,16 @@ class QueryLogicalPlanTransformation(BaseTransformation):
     @staticmethod
     def process_join_scan(query: LogicalQuery):
         condition_table_names = {}
-        if query.condition:
+        if query.condition and not isinstance(query.condition, SemanticCondition):
             for condition in query.condition.get_iterator():
                 if isinstance(condition.left, TableColumn):
                     condition_table_names[condition.left.table_name] = condition
                 if isinstance(condition.right, TableColumn):
                     condition_table_names[condition.right.table_name] = condition
+        elif query.condition and isinstance(query.condition, SemanticCondition):
+            for table_col in query.condition.table_columns:
+                if table_col.table_name not in condition_table_names:
+                    condition_table_names[table_col.table_name] = query.condition
 
         scan_operator: "ScanOperator"
         for scan_operator in query.scan_operators:
@@ -152,19 +156,21 @@ class QueryLogicalPlanTransformation(BaseTransformation):
 
         # add table columns that come from join conditions
         join_table_columns = []
-        join_operator: "JoinOperator"
-        for join_operator in query.join_operators:
-            # skip cross join
-            if not join_operator.join_condition:
+        for join_operator in query.join_operators:   
+            if isinstance(join_operator, SemanticJoinOperator):
+                join_table_columns.extend(join_operator.condition.table_columns)
+            elif not join_operator.join_condition:
+                # skip cross join
                 continue
-
-            for condition in join_operator.join_condition.get_iterator():
-                if isinstance(condition.left, TableColumn):
-                    join_table_columns.append(condition.left)
-                if isinstance(condition.right, TableColumn):
-                    join_table_columns.append(condition.right)
-            #TODO: can be further pruned
-            # join_operator.table_columns = None
+            else:
+                for condition in join_operator.join_condition.get_iterator():
+                    if isinstance(condition.left, TableColumn):
+                        join_table_columns.append(condition.left)
+                    if isinstance(condition.right, TableColumn):
+                        join_table_columns.append(condition.right)
+                #TODO: can be further pruned
+                # join_operator.table_columns = None
+        
         for join_table_column in join_table_columns:
             for scan_operator in query.scan_operators:
                 if scan_operator.table_name != join_table_column.table_name:
@@ -301,6 +307,39 @@ class SelectTransformation(BaseTransformation):
                                                        f' the same column {lookup_column_name}.')
                     target_table_name = table_name
         return target_table_name
+    
+    @classmethod
+    def _get_semantic_condition(cls, sem_match, query):
+        # Get the table columns by converting identifiers into TableColumn
+        table_columns = []
+        for target in sem_match.identifiers:
+            table_name, column_name = None, None
+            if isinstance(target, Identifier) and '.' in target.parts:
+                # Get table and column name based on DOT
+                items = target.parts.split('.')
+                if len(items) != 2:
+                    raise InitializationStageError(f"syntax error: '{target.parts}'.")
+                table_name, column_name = items
+                if table_name not in query.from_tables:
+                    raise InitializationStageError(f"not found '{table_name}'.")
+                found_column_name = False
+                for attr_form in query.table_attr_forms[table_name]:
+                    if attr_form.name == column_name:
+                        found_column_name = True
+                        break
+                if not found_column_name:
+                    raise InitializationStageError(f"not found column '{column_name}' in '{table_name}'.")
+            elif isinstance(target, Identifier):
+                # Get table name based on column name
+                column_name = target.parts
+                table_name = cls._find_table_name(query, column_name)
+                if table_name is None:
+                    raise InitializationStageError(f"not found '{table_name}'.")
+            else:
+                raise InitializationStageError(f"Target is not Identifier.")
+            table_columns.append(TableColumn(table_name, column_name))
+            
+        return SemanticCondition(sem_match.condition, table_columns)
 
     @classmethod
     def transform_from_clause(cls, ast_outer, query):
@@ -349,7 +388,9 @@ class SelectTransformation(BaseTransformation):
                     table_source_scan = [table_source_scan]
 
                 semantic_op = SemanticScanOperator(
+                    table_name=table_name,
                     prompt_columns=prompt_columns,
+                    condition=None,
                     children=table_source_scan
                 )
                 query.scan_operators.append(semantic_op)
@@ -460,17 +501,20 @@ class SelectTransformation(BaseTransformation):
     @classmethod
     def transform_where_clause(cls, ast, query):
         if ast is not None:
-            where_condition = ConditionTransformation.on_transform(Condition(ast))
-            if isinstance(where_condition, bool):
-                if where_condition:
-                    query.condition = None  # we don't need condition
+            if isinstance(ast, SemanticMatch):
+                query.condition = cls._get_semantic_condition(ast, query)
+            else:        
+                where_condition = ConditionTransformation.on_transform(Condition(ast))
+                if isinstance(where_condition, bool):
+                    if where_condition:
+                        query.condition = None  # we don't need condition
+                    else:
+                        raise NotImplementedError('should return empty set directly.')
+                elif isinstance(where_condition, Condition):
+                    # supplement missing table name and check existing table name
+                    query.condition = cls._supplement_table_name(where_condition, query.table_attr_forms)
                 else:
-                    raise NotImplementedError('should return empty set directly.')
-            elif isinstance(where_condition, Condition):
-                # supplement missing table name and check existing table name
-                query.condition = cls._supplement_table_name(where_condition, query.table_attr_forms)
-            else:
-                raise NotImplementedError('not supported this syntax.')
+                    raise NotImplementedError('not supported this syntax.')
 
     @classmethod
     def transform_join_clause(cls, ast, query):
@@ -478,19 +522,37 @@ class SelectTransformation(BaseTransformation):
             # maybe it is a multi-way join
             if isinstance(ast.left, Join):
                 SelectTransformation.transform_join_clause(ast.left, query)
+            # right should always be a table for now
             if isinstance(ast.right, Join):
                 SelectTransformation.transform_join_clause(ast.right, query)
 
             join_clause = ast
-            if not join_clause.implicit:
-                join_condition = ConditionTransformation.on_transform(Condition(join_clause.condition))
-                join_condition = cls._supplement_table_name(join_condition, query.table_attr_forms)
+            
+            # Get left and right table names
+            if isinstance(join_clause.left, SemanticTabular):
+                left_table_name = join_clause.left.identifier.parts
             else:
-                join_condition = None
+                left_table_name = join_clause.left.parts
+            if isinstance(join_clause.right, SemanticTabular):
+                right_table_name = join_clause.right.identifier.parts
+            else:
+                right_table_name = join_clause.right.parts
+            
+            if not join_clause.implicit:
+                if isinstance(join_clause.condition, SemanticMatch):
+                    semantic_condition = cls._get_semantic_condition(join_clause.condition, query)
+                    join_operator = SemanticJoinOperator(condition=semantic_condition,
+                                                         children_table_names=[left_table_name, right_table_name],
+                                                         join_type=join_clause.join_type)
+                else:
+                    join_condition = ConditionTransformation.on_transform(Condition(join_clause.condition))
+                    join_condition = cls._supplement_table_name(join_condition, query.table_attr_forms)
+                    join_operator = JoinOperator(join_condition=join_condition,
+                                            join_type=join_clause.join_type)
+            else:
+                join_operator = JoinOperator(join_condition=None,
+                                            join_type=join_clause.join_type)
 
-            join_operator = JoinOperator(join_condition=join_condition,
-                                         join_type=join_clause.join_type)
-            left_table_name, right_table_name = join_clause.left.parts, join_clause.right.parts
             left_scan_operator = right_scan_operator = None
             for scan_operator in query.scan_operators:
                 # for self-joining, the left and right table reuse a same scan operator

@@ -481,7 +481,8 @@ class FileScan(PhysicalOperator):
         self.file_path = file_path
         self.fd = None
         self.columns = columns
-        self.embedding_model = default_embedding_model()
+        self.has_init_models = False
+        self.embedding_model = None
 
     def open(self):
         if self.file_path[-3:] != 'txt':
@@ -497,6 +498,10 @@ class FileScan(PhysicalOperator):
                             for form in CATALOG_ANDB_ATTRIBUTE.get_table_forms(OID_SCANNING_FILE)]
 
     def next(self):
+        if not self.has_init_models:
+            self.has_init_models = True
+            self.embedding_model = default_embedding_model()
+        
         assert len(self.columns) == 2  # content, embedding
 
         content = ''.join(self.fd.readlines())
